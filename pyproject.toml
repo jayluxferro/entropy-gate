@@ -1,0 +1,26 @@
+[project]
+name = "entropy-gate"
+version = "0.1.0"
+description = "Adiabatic token compression layer for LLM pipelines"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "typer>=0.15",
+    "pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
