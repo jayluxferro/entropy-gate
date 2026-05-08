@@ -57,6 +57,7 @@ _TOKEN_PATTERNS: list[tuple[str, float]] = [
      r'finally|with|import|from|as|raise|assert|break|continue|pass|lambda|'
      r'nonlocal|global|del|match|case)\b$', 0.85),       # keywords
     (r'^\b(True|False|None|self|cls)\b$', 0.55),         # built-in constants
+    (r'^[A-Z][a-zA-Z0-9_]*$', 0.78),                     # capitalized identifiers (proper nouns, classes)
     (r'^[a-zA-Z_][a-zA-Z0-9_]*$', 0.65),                 # identifiers
     (r'^\b(\d+\.?\d*|0x[0-9a-fA-F]+|0b[01]+)\b$', 0.45),  # literals (numbers)
     (r'^[\'"].*[\'"]$', 0.40),                            # string literals

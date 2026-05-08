@@ -118,7 +118,7 @@ def test_reconstruct_text_preserves_order():
 
 
 def test_quench_deterministic():
-    config = QuenchingConfig(similarity_threshold=0.80, cooling_rate=0.3)
+    config = QuenchingConfig(similarity_threshold=0.80, cooling_rate=0.3, min_tokens=10)
     tokens = SAMPLE_TOKENS
     energies = _get_energies(tokens)
     result = quench(tokens, energies, config)
@@ -130,7 +130,8 @@ def test_quench_deterministic():
 
 def test_quench_boltzmann():
     config = QuenchingConfig(
-        similarity_threshold=0.80, cooling_rate=0.3, survival_mode="boltzmann"
+        similarity_threshold=0.80, cooling_rate=0.3, survival_mode="boltzmann",
+        min_tokens=10,
     )
     tokens = SAMPLE_TOKENS
     energies = _get_energies(tokens)
@@ -141,7 +142,7 @@ def test_quench_boltzmann():
 
 def test_quench_monotonicity_theorem():
     """Verify Theorem 2: quenching produces nested survival sets."""
-    config = QuenchingConfig(similarity_threshold=0.50, cooling_rate=0.5)
+    config = QuenchingConfig(similarity_threshold=0.50, cooling_rate=0.5, min_tokens=10)
     tokens = ["the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog"] * 3
     energies = _get_energies(tokens)
     result = quench(tokens, energies, config)
@@ -156,10 +157,10 @@ def test_quench_compression_increases_with_alpha():
     tokens = SAMPLE_TOKENS * 5
     energies = _get_energies(tokens)
 
-    config_low = QuenchingConfig(similarity_threshold=0.60, cooling_rate=0.1)
+    config_low = QuenchingConfig(similarity_threshold=0.60, cooling_rate=0.1, min_tokens=10)
     result_low = quench(tokens, energies, config_low)
 
-    config_high = QuenchingConfig(similarity_threshold=0.60, cooling_rate=0.6)
+    config_high = QuenchingConfig(similarity_threshold=0.60, cooling_rate=0.6, min_tokens=10)
     result_high = quench(tokens, energies, config_high)
 
     assert result_high.compression_ratio >= result_low.compression_ratio
@@ -170,10 +171,10 @@ def test_quench_compression_decreases_with_theta():
     tokens = SAMPLE_TOKENS * 5
     energies = _get_energies(tokens)
 
-    config_low = QuenchingConfig(similarity_threshold=0.70, cooling_rate=0.3)
+    config_low = QuenchingConfig(similarity_threshold=0.70, cooling_rate=0.3, min_tokens=10)
     result_low = quench(tokens, energies, config_low)
 
-    config_high = QuenchingConfig(similarity_threshold=0.90, cooling_rate=0.3)
+    config_high = QuenchingConfig(similarity_threshold=0.90, cooling_rate=0.3, min_tokens=10)
     result_high = quench(tokens, energies, config_high)
 
     assert result_high.compression_ratio <= result_low.compression_ratio
@@ -186,7 +187,7 @@ def test_quench_output_short_text():
 
 
 def test_quench_output_long_text():
-    config = QuenchingConfig(output_cooling=True, cooling_rate=0.8)
+    config = QuenchingConfig(output_cooling=True, cooling_rate=0.8, min_tokens=10)
     text = ("Certainly I would be happy to help with your question about code "
             "review and security analysis. Let me carefully examine the provided "
             "source code for potential vulnerabilities. ") * 8

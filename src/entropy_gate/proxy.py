@@ -58,18 +58,25 @@ async def health():
     return {"status": "ok", "version": "0.1.0"}
 
 
-@app.post("/v1/chat/completions")
-async def chat_completions(request: Request):
-    """OpenAI-compatible chat completions endpoint with entropy gating."""
+async def _handle_request(request: Request):
+    """Compress and forward a chat request."""
     body = await request.json()
     streaming = _is_streaming(body)
-
-    # Streaming: pass through without compression
     if streaming:
         return await _proxy_streaming(request, body)
-
-    # Non-streaming: compress input, forward, optionally cool output
     return await _proxy_compressed(request, body)
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    """OpenAI-compatible chat completions endpoint."""
+    return await _handle_request(request)
+
+
+@app.post("/v1/messages")
+async def messages(request: Request):
+    """Anthropic-compatible messages endpoint."""
+    return await _handle_request(request)
 
 
 async def _proxy_compressed(request: Request, body: dict[str, Any]) -> JSONResponse:
@@ -86,10 +93,7 @@ async def _proxy_compressed(request: Request, body: dict[str, Any]) -> JSONRespo
         mem_result = memory_aware_compress(
             messages, _memory_store, quench, estimate_token_energies, quenching_config
         )
-        # Use the compressed text from memory-aware path
-        working_text = "\n\n".join(
-            msg.get("content", "") for msg in messages
-        )
+        working_text = original_text
         dedup_tokens_saved = mem_result.tokens_repeated
         # Run quenching on the working text as usual (memory already handled in mem_result)
         tokens = tokenize(working_text)
@@ -108,17 +112,18 @@ async def _proxy_compressed(request: Request, body: dict[str, Any]) -> JSONRespo
         token_energies = estimate_token_energies(tokens, quenching_config)
         result = quench(tokens, token_energies, quenching_config)
 
-    # Step 4: Reconstruct compressed messages
+    # Step 4: Replace messages with compressed text
+    # The compressed text preserves semantic content of all original messages.
+    # We send it as a single user message — the upstream LLM interprets it.
     compressed_body = dict(body)
-    compressed_body["messages"] = _rebuild_messages(
-        messages, result.compressed_text
-    )
+    compressed_body["messages"] = [{"role": "user", "content": result.compressed_text}]
 
-    # Step 5: Forward to upstream
+    # Step 5: Forward to upstream (preserve original request path)
     start_time = time.time()
+    upstream_url = _build_upstream_url(request)
     try:
         upstream_resp = await _get_client().post(
-            server_config.upstream_url,
+            upstream_url,
             json=compressed_body,
             headers=_forward_headers(request),
             timeout=120.0,
@@ -184,39 +189,6 @@ async def _proxy_streaming(
     )
 
 
-def _rebuild_messages(
-    original_messages: list[dict[str, Any]],
-    compressed_text: str,
-) -> list[dict[str, Any]]:
-    """Rebuild message list with compressed content.
-
-    The compressed text contains the entire compressed prompt. We inject it
-    as a single user message. System messages preserve their role marker but
-    are replaced with compressed content that retains their instructional weight.
-    """
-    if not original_messages:
-        return [{"role": "user", "content": compressed_text}]
-
-    # Find the last user-role message and replace its content.
-    # System messages keep their role but use minimal content.
-    rebuilt: list[dict[str, Any]] = []
-    last_user_idx = max(
-        (i for i, m in enumerate(original_messages) if m.get("role") == "user"),
-        default=None,
-    )
-
-    for i, msg in enumerate(original_messages):
-        role = msg.get("role", "user")
-        if i == last_user_idx:
-            rebuilt.append({"role": "user", "content": compressed_text})
-        elif role == "system":
-            rebuilt.append({"role": "system", "content": ""})
-        else:
-            rebuilt.append({"role": role, "content": msg.get("content", "")})
-
-    return rebuilt
-
-
 def _quench_response(response_data: dict[str, Any]) -> dict[str, Any]:
     """Apply output-side cooling to upstream response choices."""
     choices = response_data.get("choices", [])
@@ -226,6 +198,23 @@ def _quench_response(response_data: dict[str, Any]) -> dict[str, Any]:
         if content and len(content.split()) > 30:
             message["content"] = quench_output(content, quenching_config)
     return response_data
+
+
+def _build_upstream_url(request: Request) -> str:
+    """Build the upstream URL from the base + original request path.
+
+    If the configured upstream_url already contains a path (e.g.,
+    http://host:port/v1/chat/completions), use it directly.
+    Otherwise, append the request's path and query string.
+    """
+    from urllib.parse import urlparse, urlunparse
+    base = server_config.upstream_url
+    parsed = urlparse(base)
+    if parsed.path and parsed.path != "/":
+        return base  # already has a path, use as-is
+    req_path = request.url.path
+    req_query = request.url.query
+    return urlunparse(parsed._replace(path=req_path, query=req_query))
 
 
 def _forward_headers(request: Request) -> dict[str, str]:

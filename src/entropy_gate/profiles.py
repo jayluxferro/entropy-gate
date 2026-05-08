@@ -41,12 +41,13 @@ def best() -> QuenchingConfig:
     """Best balanced compression — recommended default."""
     return QuenchingConfig(
         temperature_initial=1.0,
-        cooling_rate=0.3,
-        similarity_threshold=0.80,
+        cooling_rate=0.25,
+        similarity_threshold=0.85,
         energy_weights=EnergyWeights(w_statistical=0.5, w_structural=0.3, w_positional=0.2),
         output_cooling=True,
         dedup_enabled=True,
         survival_mode="deterministic",
+        min_tokens=50,
     )
 
 

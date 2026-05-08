@@ -111,10 +111,21 @@ def quench(
     if config is None:
         config = QuenchingConfig()
 
+    # Skip compression for very short prompts — every token matters
+    if len(tokens) < config.min_tokens:
+        return CompressionResult(
+            compressed_text=_reconstruct_text(token_energies),
+            tokens_kept=len(token_energies),
+            tokens_total=len(token_energies),
+            compression_ratio=0.0,
+            similarity_score=1.0,
+            schedule_steps=0,
+        )
+
     T0 = config.temperature_initial
     k = config.boltzmann_k
 
-    best_text = " ".join(tokens)
+    best_text = _reconstruct_text(token_energies)
     best_survivors = token_energies
     best_similarity = 1.0
     best_tau = 0

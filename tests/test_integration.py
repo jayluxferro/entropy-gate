@@ -39,7 +39,7 @@ DOCS = (
 
 
 def test_full_pipeline_code_review():
-    config = QuenchingConfig(similarity_threshold=0.75, cooling_rate=0.4)
+    config = QuenchingConfig(similarity_threshold=0.75, cooling_rate=0.4, min_tokens=10)
     tokens = CODE_REVIEW.split()
     energies = estimate_token_energies(tokens, config)
     result = quench(tokens, energies, config)
@@ -50,7 +50,7 @@ def test_full_pipeline_code_review():
 
 
 def test_full_pipeline_security_audit():
-    config = QuenchingConfig(similarity_threshold=0.80, cooling_rate=0.3)
+    config = QuenchingConfig(similarity_threshold=0.80, cooling_rate=0.3, min_tokens=10)
     tokens = SECURITY_AUDIT.split()
     energies = estimate_token_energies(tokens, config)
     result = quench(tokens, energies, config)
@@ -61,7 +61,7 @@ def test_full_pipeline_security_audit():
 
 
 def test_full_pipeline_docs():
-    config = QuenchingConfig(similarity_threshold=0.80, cooling_rate=0.3)
+    config = QuenchingConfig(similarity_threshold=0.80, cooling_rate=0.3, min_tokens=10)
     tokens = DOCS.split()
     energies = estimate_token_energies(tokens, config)
     result = quench(tokens, energies, config)
@@ -74,7 +74,7 @@ def test_pipeline_with_dedup():
     text = block * 3
     dedup_result = deduplicate_blocks(text)
     tokens = dedup_result.deduplicated_text.split()
-    config = QuenchingConfig(similarity_threshold=0.80, cooling_rate=0.3)
+    config = QuenchingConfig(similarity_threshold=0.80, cooling_rate=0.3, min_tokens=10)
     energies = estimate_token_energies(tokens, config)
     result = quench(tokens, energies, config)
     total_saved = dedup_result.tokens_saved + (len(tokens) - result.tokens_kept)
@@ -84,7 +84,7 @@ def test_pipeline_with_dedup():
 
 def test_embedding_fidelity_correlates():
     """Embedding similarity should positively correlate with compression quality."""
-    config = QuenchingConfig(similarity_threshold=0.80, cooling_rate=0.3)
+    config = QuenchingConfig(similarity_threshold=0.80, cooling_rate=0.3, min_tokens=10)
     tokens = CODE_REVIEW.split()
     energies = estimate_token_energies(tokens, config)
     result = quench(tokens, energies, config)
@@ -174,7 +174,7 @@ def test_edge_case_all_frozen():
 
 def test_different_prompt_types_stability():
     """All prompt types should compress with similarity > 0.75."""
-    config = QuenchingConfig(similarity_threshold=0.75, cooling_rate=0.3)
+    config = QuenchingConfig(similarity_threshold=0.75, cooling_rate=0.3, min_tokens=10)
     prompts = [CODE_REVIEW, SECURITY_AUDIT, DOCS]
 
     for prompt in prompts:
