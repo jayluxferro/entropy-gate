@@ -1,7 +1,7 @@
 [project]
 name = "entropy-gate"
 version = "0.1.0"
-description = "Adiabatic token compression layer for LLM pipelines"
+description = "Token compression via entropy quenching — progressively freezes out low-information tokens while preserving semantic fidelity"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28",
