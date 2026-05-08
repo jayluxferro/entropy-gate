@@ -128,7 +128,7 @@ Set `--use-model-energy` to enable model-derived energy via llama-server on gemm
 
 ```yaml
 - name: entropy-gate
-  directory: /Volumes/Lux/dev/ml/mcp/entropy-gate
+  directory: /path/to/entropy-gate
   command: uv run python -m entropy_gate.cli --port {port} --upstream {upstream} --profile best
   port: 7787
   health: /health
