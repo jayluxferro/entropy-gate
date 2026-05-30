@@ -52,7 +52,7 @@ def best() -> QuenchingConfig:
 
 
 def mild() -> QuenchingConfig:
-    """Mild compression — maximum semantic preservation."""
+    """Mild compression — maximum semantic preservation for agentic use."""
     return QuenchingConfig(
         temperature_initial=1.0,
         cooling_rate=0.15,
@@ -61,6 +61,7 @@ def mild() -> QuenchingConfig:
         output_cooling=True,
         dedup_enabled=True,
         survival_mode="deterministic",
+        min_tokens=100,
     )
 
 
@@ -104,7 +105,7 @@ def output_quench() -> QuenchingConfig:
 
 
 def mcp_safe() -> QuenchingConfig:
-    """MCP-safe — preserves tool names and JSON schemas."""
+    """MCP-safe — preserves tool names and JSON schemas for agentic use."""
     return QuenchingConfig(
         temperature_initial=1.0,
         cooling_rate=0.15,
@@ -117,6 +118,7 @@ def mcp_safe() -> QuenchingConfig:
         output_cooling=True,
         dedup_enabled=True,
         survival_mode="deterministic",
+        min_tokens=80,
     )
 
 

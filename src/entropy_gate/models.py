@@ -50,6 +50,13 @@ class QuenchingConfig:
     embedding_model: str = "nomic-embed-text"
     ollama_base_url: str = "http://localhost:11434"
 
+    # Multi-turn / structural compression
+    multi_turn_enabled: bool = True
+    protected_recent_turns: int = 2     # last N turns keep full temperature
+    turn_decay: float = 0.7             # T0 *= decay ** distance_beyond_protected
+    block_min_chars: int = 80           # skip blocks shorter than this
+    cross_turn_freeze_chars: int = 400  # hash & memoize blocks at least this large
+
 
 @dataclass
 class TokenEnergy:

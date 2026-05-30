@@ -170,6 +170,45 @@ def quench(
     )
 
 
+def quench_text(
+    text: str,
+    config: QuenchingConfig | None = None,
+    *,
+    temperature_initial: float | None = None,
+) -> CompressionResult:
+    """Convenience: tokenize, score, and quench a raw text span.
+
+    ``temperature_initial`` overrides ``config.temperature_initial`` for
+    this single call (used by turn-decay scheduling).  The config is left
+    untouched.
+    """
+    from entropy_gate.energy import estimate_token_energies, tokenize
+
+    if config is None:
+        config = QuenchingConfig()
+
+    if temperature_initial is not None and temperature_initial != config.temperature_initial:
+        # Build a shallow copy with the new T0 only.
+        from dataclasses import replace
+
+        local_cfg = replace(config, temperature_initial=temperature_initial)
+    else:
+        local_cfg = config
+
+    tokens = tokenize(text)
+    if not tokens:
+        return CompressionResult(
+            compressed_text=text,
+            tokens_kept=0,
+            tokens_total=0,
+            compression_ratio=0.0,
+            similarity_score=1.0,
+            schedule_steps=0,
+        )
+    energies = estimate_token_energies(tokens, local_cfg)
+    return quench(tokens, energies, local_cfg)
+
+
 def quench_output(text: str, config: QuenchingConfig | None = None) -> str:
     """Quench an upstream (non-streaming) response before returning to client.
 

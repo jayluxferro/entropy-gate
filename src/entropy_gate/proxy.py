@@ -1,12 +1,23 @@
-"""FastAPI HTTP proxy with OpenAI-compatible endpoint.
+"""FastAPI HTTP proxy with OpenAI- and Anthropic-compatible endpoints.
 
-Receives chat completion requests, runs the compression pipeline
-(dedup → energy → cool), forwards to upstream, and optionally
-output-cools the response.
+Receives chat completion / messages requests, runs structural multi-turn
+entropy quenching, forwards to upstream, and optionally output-cools the
+response.
+
+Key invariants (see ``structure.py`` for the full list):
+
+* The last user message and all ``tool_use`` / ``tool_result`` blocks
+  pass through untouched.
+* Compression is per-span, with a per-turn temperature decay that
+  compresses older turns more aggressively.
+* Headers are forwarded verbatim except hop-by-hop (the previous
+  implementation stripped ``anthropic-version`` and broke Anthropic).
+* Streaming requests preserve the original request path.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from typing import Any
@@ -15,16 +26,22 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from entropy_gate.quenching import quench, quench_output
 from entropy_gate.dedup import deduplicate_blocks
-from entropy_gate.energy import estimate_token_energies, tokenize
-from entropy_gate.memory import MemoryStore, memory_aware_compress, MemoryCompressionResult
-from entropy_gate.models import QuenchingConfig, ServerConfig
+from entropy_gate.memory import MemoryStore
+from entropy_gate.models import CompressionResult, QuenchingConfig, ServerConfig
+from entropy_gate.quenching import quench_output, quench_text
+from entropy_gate.structure import (
+    CompressibleSpan,
+    MessagePlan,
+    apply_compression,
+    plan_compression,
+    turn_temperature,
+)
 
 app = FastAPI(
     title="Entropy Gate",
-    version="0.1.0",
-    description="Entropy quenching token compression layer for LLM pipelines",
+    version="0.2.0",
+    description="Structural multi-turn entropy quenching for LLM pipelines",
 )
 
 # Set by cli.py at startup
@@ -33,92 +50,76 @@ server_config: ServerConfig = ServerConfig()
 _http_client: httpx.AsyncClient | None = None
 _memory_store: MemoryStore | None = None
 
-
-def _extract_text(messages: list[dict[str, Any]]) -> str:
-    """Concatenate chat messages into a single prompt text."""
-    parts: list[str] = []
-    for msg in messages:
-        content = msg.get("content", "")
-        if isinstance(content, str):
-            parts.append(content)
-        elif isinstance(content, list):
-            # Multi-modal: concatenate text parts only
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    parts.append(part.get("text", ""))
-    return "\n\n".join(parts)
+# Hop-by-hop headers (RFC 7230 + httpx-managed) that must never be forwarded.
+_HOP_BY_HOP = frozenset(
+    {
+        "host",
+        "content-length",
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "expect",
+        "accept-encoding",  # let httpx negotiate
+    }
+)
 
 
 def _is_streaming(body: dict[str, Any]) -> bool:
-    return body.get("stream", False)
+    return bool(body.get("stream", False))
 
 
 @app.get("/health")
-async def health():
-    return {"status": "ok", "version": "0.1.0"}
-
-
-async def _handle_request(request: Request):
-    """Compress and forward a chat request."""
-    body = await request.json()
-    streaming = _is_streaming(body)
-    if streaming:
-        return await _proxy_streaming(request, body)
-    return await _proxy_compressed(request, body)
+async def health() -> dict[str, str]:
+    return {"status": "ok", "version": "0.2.0"}
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: Request):
+async def chat_completions(request: Request) -> Any:
     """OpenAI-compatible chat completions endpoint."""
     return await _handle_request(request)
 
 
 @app.post("/v1/messages")
-async def messages(request: Request):
+async def messages(request: Request) -> Any:
     """Anthropic-compatible messages endpoint."""
     return await _handle_request(request)
 
 
+async def _handle_request(request: Request) -> Any:
+    body = await request.json()
+    if _is_streaming(body):
+        return await _proxy_streaming(request, body)
+    return await _proxy_compressed(request, body)
+
+
+# ---------------------------------------------------------------------------
+# Compression
+# ---------------------------------------------------------------------------
+
+
 async def _proxy_compressed(request: Request, body: dict[str, Any]) -> JSONResponse:
-    """Compress prompt, forward to upstream, cool response."""
+    """Compress prompt structurally, forward to upstream, cool response."""
     global _memory_store
-    messages: list[dict[str, Any]] = body.get("messages", [])
-    original_text = _extract_text(messages)
+    cfg = quenching_config
 
-    # ── Memory-aware path (cross-request memory + quenching) ──
-    mem_result: MemoryCompressionResult | None = None
-    if quenching_config.memory_enabled:
-        if _memory_store is None:
-            _memory_store = MemoryStore()
-        mem_result = memory_aware_compress(
-            messages, _memory_store, quench, estimate_token_energies, quenching_config
-        )
-        working_text = original_text
-        dedup_tokens_saved = mem_result.tokens_repeated
-        # Run quenching on the working text as usual (memory already handled in mem_result)
-        tokens = tokenize(working_text)
-        token_energies = estimate_token_energies(tokens, quenching_config)
-        result = quench(tokens, token_energies, quenching_config)
-    else:
-        # ── Standard path (dedup → quench) ──
-        working_text = original_text
-        dedup_tokens_saved = 0
-        if quenching_config.dedup_enabled:
-            dedup_result = deduplicate_blocks(working_text)
-            working_text = dedup_result.deduplicated_text
-            dedup_tokens_saved = dedup_result.tokens_saved
+    plan = plan_compression(body, min_chars=cfg.block_min_chars)
 
-        tokens = tokenize(working_text)
-        token_energies = estimate_token_energies(tokens, quenching_config)
-        result = quench(tokens, token_energies, quenching_config)
+    if not plan.spans or not cfg.multi_turn_enabled:
+        # Nothing safe to compress (single-turn live query, all tool-heavy,
+        # or feature disabled) — pass through verbatim.
+        return await _proxy_passthrough(request, body)
 
-    # Step 4: Replace messages with compressed text
-    # The compressed text preserves semantic content of all original messages.
-    # We send it as a single user message — the upstream LLM interprets it.
-    compressed_body = dict(body)
-    compressed_body["messages"] = [{"role": "user", "content": result.compressed_text}]
+    if cfg.memory_enabled and _memory_store is None:
+        _memory_store = MemoryStore()
 
-    # Step 5: Forward to upstream (preserve original request path)
+    replacements, audit = _compress_spans(plan, cfg, memory=_memory_store)
+    compressed_body = apply_compression(body, plan, replacements)
+
     start_time = time.time()
     upstream_url = _build_upstream_url(request)
     try:
@@ -126,7 +127,7 @@ async def _proxy_compressed(request: Request, body: dict[str, Any]) -> JSONRespo
             upstream_url,
             json=compressed_body,
             headers=_forward_headers(request),
-            timeout=120.0,
+            timeout=300.0,
         )
         upstream_resp.raise_for_status()
         upstream_data = upstream_resp.json()
@@ -138,44 +139,160 @@ async def _proxy_compressed(request: Request, body: dict[str, Any]) -> JSONRespo
 
     elapsed = time.time() - start_time
 
-    # Step 6: Output-side cooling
-    if quenching_config.output_cooling:
-        upstream_data = _quench_response(upstream_data)
+    if cfg.output_cooling:
+        upstream_data = _quench_response(upstream_data, plan.api)
 
-    # Attach compression metadata
     upstream_data.setdefault("_entropy_gate", {})
     upstream_data["_entropy_gate"] = {
-        "compression_ratio": result.compression_ratio,
-        "tokens_kept": result.tokens_kept,
-        "tokens_total": result.tokens_total,
-        "dedup_tokens_saved": dedup_tokens_saved,
-        "similarity_score": result.similarity_score,
-        "quenching_steps": result.schedule_steps,
+        "api": plan.api,
+        "turns_total": plan.total_turns,
+        "spans_compressed": audit["spans_compressed"],
+        "spans_frozen_memory": audit["spans_frozen_memory"],
+        "tokens_original": audit["tokens_original"],
+        "tokens_kept": audit["tokens_kept"],
+        "compression_ratio": audit["compression_ratio"],
         "upstream_latency_ms": int(elapsed * 1000),
     }
-    if mem_result is not None:
-        upstream_data["_entropy_gate"]["memory_reduction"] = mem_result.memory_reduction
-        upstream_data["_entropy_gate"]["memory_tokens_saved"] = mem_result.tokens_repeated
-        upstream_data["_entropy_gate"]["total_reduction"] = mem_result.total_reduction
-
     return JSONResponse(content=upstream_data)
+
+
+def _compress_spans(
+    plan: MessagePlan,
+    cfg: QuenchingConfig,
+    *,
+    memory: MemoryStore | None,
+) -> tuple[dict[tuple[int, int | None], str], dict[str, Any]]:
+    """Compress each compressible span with turn-decayed quenching.
+
+    Cross-turn freeze: spans whose normalized text matches a hash already
+    stored in ``memory`` are replaced by a short reference instead of
+    re-running the entropy quench.  This is the multiplicative ``Theorem 9``
+    reduction in :mod:`entropy_gate.memory`, lifted to multi-turn.
+    """
+    replacements: dict[tuple[int, int | None], str] = {}
+    tokens_original = 0
+    tokens_kept = 0
+    spans_compressed = 0
+    spans_frozen_memory = 0
+
+    for span in plan.spans:
+        text = span.text
+        tokens_original += len(text.split())
+
+        # ---- Cross-turn freeze: same big block seen earlier in session? ----
+        if memory is not None and len(text) >= cfg.cross_turn_freeze_chars:
+            digest = _block_hash(text)
+            existing = memory.get(digest)
+            if existing is not None:
+                ref = f"[memory:{digest[:8]}]"
+                replacements[(span.message_index, span.block_index)] = ref
+                tokens_kept += len(ref.split())
+                spans_frozen_memory += 1
+                # Touch access counter.
+                memory.lookup(text)
+                continue
+            # First sighting — store and fall through to quench.
+            memory.store(text)
+
+        # ---- Optional dedup pre-pass within this span ----
+        working = text
+        if cfg.dedup_enabled:
+            d = deduplicate_blocks(working)
+            working = d.deduplicated_text
+
+        # ---- Turn-decayed entropy quench ----
+        t0_effective = turn_temperature(
+            span.turn_index,
+            total_turns=plan.total_turns,
+            protected_recent=cfg.protected_recent_turns,
+            decay=cfg.turn_decay,
+            t0=cfg.temperature_initial,
+        )
+        result: CompressionResult = quench_text(
+            working,
+            cfg,
+            temperature_initial=t0_effective,
+        )
+        compressed = result.compressed_text if result.compressed_text else working
+
+        # If compression bloated the text (shouldn't happen, but defensive), skip.
+        if len(compressed.split()) >= len(text.split()):
+            tokens_kept += len(text.split())
+            continue
+
+        replacements[(span.message_index, span.block_index)] = compressed
+        tokens_kept += len(compressed.split())
+        spans_compressed += 1
+
+    compression_ratio = (
+        1.0 - (tokens_kept / tokens_original) if tokens_original > 0 else 0.0
+    )
+    audit = {
+        "tokens_original": tokens_original,
+        "tokens_kept": tokens_kept,
+        "compression_ratio": round(compression_ratio, 4),
+        "spans_compressed": spans_compressed,
+        "spans_frozen_memory": spans_frozen_memory,
+    }
+    return replacements, audit
+
+
+def _block_hash(text: str) -> str:
+    normalized = " ".join(text.split())
+    return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Passthrough + streaming
+# ---------------------------------------------------------------------------
+
+
+async def _proxy_passthrough(request: Request, body: dict[str, Any]) -> JSONResponse:
+    """Forward request unchanged — used when no spans are compressible."""
+    upstream_url = _build_upstream_url(request)
+    try:
+        upstream_resp = await _get_client().post(
+            upstream_url,
+            json=body,
+            headers=_forward_headers(request),
+            timeout=300.0,
+        )
+        return JSONResponse(
+            content=upstream_resp.json() if upstream_resp.status_code == 200 else None,
+            status_code=upstream_resp.status_code,
+        )
+    except httpx.TimeoutException:
+        return JSONResponse(status_code=504, content={"error": "Upstream timeout"})
+    except httpx.HTTPError as exc:
+        return JSONResponse(status_code=502, content={"error": f"Upstream error: {exc}"})
 
 
 async def _proxy_streaming(
     request: Request, body: dict[str, Any]
 ) -> StreamingResponse:
-    """Pass streaming requests through without compression."""
+    """Pass streaming requests through, preserving the original request path.
+
+    We do NOT compress streaming requests in this version — multi-turn
+    structural compression is non-trivial to reconcile with SSE and the
+    win is small (streaming bodies tend to be short).
+    """
+    upstream_url = _build_upstream_url(request)
+    headers = _forward_headers(request)
 
     async def stream_response():
         try:
             async with _get_client().stream(
                 "POST",
-                server_config.upstream_url,
+                upstream_url,
                 json=body,
-                headers=_forward_headers(request),
-                timeout=300.0,
+                headers=headers,
+                timeout=600.0,
             ) as upstream_resp:
-                upstream_resp.raise_for_status()
+                if upstream_resp.status_code >= 400:
+                    # Surface upstream error body to the client.
+                    body_bytes = await upstream_resp.aread()
+                    yield body_bytes
+                    return
                 async for chunk in upstream_resp.aiter_bytes():
                     yield chunk
         except httpx.HTTPError as exc:
@@ -189,47 +306,84 @@ async def _proxy_streaming(
     )
 
 
-def _quench_response(response_data: dict[str, Any]) -> dict[str, Any]:
-    """Apply output-side cooling to upstream response choices."""
-    choices = response_data.get("choices", [])
-    for choice in choices:
-        message = choice.get("message", {})
-        content = message.get("content", "")
-        if content and len(content.split()) > 30:
-            message["content"] = quench_output(content, quenching_config)
+# ---------------------------------------------------------------------------
+# Response post-processing
+# ---------------------------------------------------------------------------
+
+
+def _quench_response(response_data: dict[str, Any], api: str) -> dict[str, Any]:
+    """Apply output-side cooling to upstream response content.
+
+    Handles OpenAI ``choices[].message.content`` (string) and Anthropic
+    ``content`` (list of blocks).  Skips short content where compression
+    would lose more than it saves.
+    """
+    if not isinstance(response_data, dict):
+        return response_data
+
+    if api == "openai":
+        choices = response_data.get("choices", []) or []
+        for choice in choices:
+            message = choice.get("message", {}) or {}
+            content = message.get("content", "")
+            if isinstance(content, str) and content and len(content.split()) > 30:
+                message["content"] = quench_output(content, quenching_config)
+        return response_data
+
+    # anthropic
+    content = response_data.get("content", []) or []
+    if isinstance(content, list):
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+                and len(block["text"].split()) > 30
+            ):
+                block["text"] = quench_output(block["text"], quenching_config)
     return response_data
+
+
+# ---------------------------------------------------------------------------
+# Header + URL helpers
+# ---------------------------------------------------------------------------
 
 
 def _build_upstream_url(request: Request) -> str:
     """Build the upstream URL from the base + original request path.
 
-    If the configured upstream_url already contains a path (e.g.,
-    http://host:port/v1/chat/completions), use it directly.
-    Otherwise, append the request's path and query string.
+    If the configured upstream_url already contains a non-root path (e.g.,
+    ``http://host:port/v1/chat/completions``), use it as-is.  Otherwise,
+    append the inbound request's path and query string.
     """
     from urllib.parse import urlparse, urlunparse
+
     base = server_config.upstream_url
     parsed = urlparse(base)
     if parsed.path and parsed.path != "/":
-        return base  # already has a path, use as-is
+        return base
     req_path = request.url.path
     req_query = request.url.query
     return urlunparse(parsed._replace(path=req_path, query=req_query))
 
 
 def _forward_headers(request: Request) -> dict[str, str]:
-    """Forward relevant headers to upstream."""
-    forward = {
-        "Content-Type": "application/json",
-    }
-    # Forward auth header if present
-    auth = request.headers.get("Authorization")
-    if auth:
-        forward["Authorization"] = auth
-    # Forward API key if present
-    api_key = request.headers.get("x-api-key")
-    if api_key:
-        forward["x-api-key"] = api_key
+    """Forward ALL inbound headers except hop-by-hop.
+
+    Earlier versions only forwarded ``Authorization`` + ``x-api-key``,
+    which stripped ``anthropic-version`` / ``anthropic-beta`` and broke
+    the Anthropic API path.  We now allow-everything except a hop-by-hop
+    deny list, mirroring the pattern hivemind uses.
+    """
+    forward: dict[str, str] = {"Content-Type": "application/json"}
+    for k, v in request.headers.items():
+        if k.lower() in _HOP_BY_HOP:
+            continue
+        # Drop the inbound Content-Length / Content-Type since we re-encode
+        # the body via httpx ``json=...``.
+        if k.lower() == "content-type":
+            continue
+        forward[k] = v
     return forward
 
 

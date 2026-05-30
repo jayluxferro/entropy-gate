@@ -29,12 +29,16 @@ from entropy_gate.proxy import app, quenching_config, server_config
 @click.option("--output-cooling/--no-output-cooling", default=None, help="Enable output-side cooling")
 @click.option("--dedup/--no-dedup", default=None, help="Enable context dedup pre-pass")
 @click.option("--memory/--no-memory", default=None, help="Enable cross-request memory-aware compression")
+@click.option("--multi-turn/--no-multi-turn", default=None, help="Enable structural multi-turn compression")
+@click.option("--turn-decay", type=float, default=None, help="Per-turn temperature decay multiplier (0,1]")
+@click.option("--protected-recent-turns", type=int, default=None, help="Last N turns left at full temperature")
 @click.option("--log-level", type=str, default=None, help="Log level (debug, info, warning, error)")
 def main(
     port, upstream, config_path, profile,
     temperature_initial, cooling_rate, similarity_threshold,
     w_statistical, w_structural, w_positional,
     output_cooling, dedup, memory,
+    multi_turn, turn_decay, protected_recent_turns,
     log_level,
 ):
     """Entropy Gate — token compression via entropy quenching."""
@@ -48,6 +52,9 @@ def main(
             "output_cooling": output_cooling,
             "dedup_enabled": dedup,
             "memory_enabled": memory,
+            "multi_turn_enabled": multi_turn,
+            "turn_decay": turn_decay,
+            "protected_recent_turns": protected_recent_turns,
         }.items() if v is not None
     }
 
@@ -83,7 +90,7 @@ def main(
     proxy_mod.quenching_config = cc
     proxy_mod.server_config = sc
 
-    click.echo(f"Entropy Gate v0.1.0" + (f" [profile: {profile}]" if profile else ""))
+    click.echo(f"Entropy Gate v0.2.0" + (f" [profile: {profile}]" if profile else ""))
     click.echo(f"  Upstream:    {sc.upstream_url}")
     click.echo(f"  Port:        {sc.port}")
     click.echo(f"  Quenching:   T0={cc.temperature_initial}, alpha={cc.cooling_rate}")
