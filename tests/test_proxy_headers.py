@@ -125,6 +125,42 @@ def test_streaming_preserves_request_path() -> None:
     assert sent.headers.get("anthropic-version") == "2023-06-01"
 
 
+def test_thinking_block_request_forwards_raw_bytes() -> None:
+    """A request containing a ``thinking`` block must reach upstream byte-identical.
+
+    Anthropic validates thinking-block signatures against the original JSON
+    bytes.  Any json.loads/dumps round-trip in the chain breaks them with
+    a 400.  Verify the entropy-gate proxy uses ``content=raw_body`` and
+    sends the exact bytes received.
+    """
+    transport = _install_capture_client()
+    client = TestClient(proxy_mod.app)
+    # Hand-craft the body so we control the exact byte representation —
+    # this is what we then assert came through verbatim.
+    raw_body = (
+        b'{"model":"claude-sonnet","messages":'
+        b'[{"role":"user","content":"hi"},'
+        b'{"role":"assistant","content":[{"type":"thinking",'
+        b'"thinking":"step 1","signature":"abc123"}]},'
+        b'{"role":"user","content":"continue"}]}'
+    )
+
+    response = client.post(
+        "/v1/messages",
+        content=raw_body,
+        headers={
+            "content-type": "application/json",
+            "x-api-key": "sk",
+            "anthropic-version": "2023-06-01",
+        },
+    )
+    assert response.status_code == 200
+    assert len(transport.requests) == 1
+    sent = transport.requests[0]
+    # The body that hit the upstream must be identical to what we sent.
+    assert sent.content == raw_body
+
+
 def test_openai_chat_completions_path_preserved() -> None:
     transport = _install_capture_client()
     client = TestClient(proxy_mod.app)

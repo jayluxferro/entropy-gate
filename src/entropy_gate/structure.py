@@ -116,6 +116,27 @@ def _message_has_tool_payload(msg: dict[str, Any], api: str) -> bool:
     return False
 
 
+def body_has_signed_blocks(body: dict[str, Any]) -> bool:
+    """True if the body contains any signed Anthropic content blocks.
+
+    ``thinking`` and ``redacted_thinking`` blocks carry signatures that
+    Anthropic validates against the exact JSON encoding it served.  Any
+    JSON parse + re-serialize through the chain breaks them — even if
+    the blocks themselves are passed through unchanged — so callers
+    must forward raw bytes for these requests.
+    """
+    for msg in body.get("messages") or []:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in (
+                    "thinking",
+                    "redacted_thinking",
+                ):
+                    return True
+    return False
+
+
 def plan_compression(
     body: dict[str, Any],
     *,

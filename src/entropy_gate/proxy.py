@@ -24,7 +24,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from entropy_gate.dedup import deduplicate_blocks
 from entropy_gate.memory import MemoryStore
@@ -34,6 +34,7 @@ from entropy_gate.structure import (
     CompressibleSpan,
     MessagePlan,
     apply_compression,
+    body_has_signed_blocks,
     plan_compression,
     turn_temperature,
 )
@@ -91,10 +92,32 @@ async def messages(request: Request) -> Any:
 
 
 async def _handle_request(request: Request) -> Any:
-    body = await request.json()
-    if _is_streaming(body):
-        return await _proxy_streaming(request, body)
-    return await _proxy_compressed(request, body)
+    # Read the raw body up front so the passthrough / streaming / signed-block
+    # paths can forward it byte-for-byte.  Anthropic validates ``thinking``
+    # block signatures against the exact JSON encoding it served, so any
+    # json.loads/dumps round-trip would break them with a 400.
+    raw_body = await request.body()
+    try:
+        body = json.loads(raw_body) if raw_body else {}
+    except json.JSONDecodeError:
+        # Invalid JSON — let the upstream return the appropriate error.
+        return await _proxy_passthrough(request, body={}, raw_body=raw_body)
+
+    if not isinstance(body, dict):
+        return await _proxy_passthrough(request, body={}, raw_body=raw_body)
+
+    streaming = _is_streaming(body)
+
+    # Requests containing signed content blocks (thinking / redacted_thinking)
+    # must reach the upstream byte-identical or signature validation fails.
+    if body_has_signed_blocks(body):
+        if streaming:
+            return await _proxy_streaming(request, body, raw_body=raw_body)
+        return await _proxy_passthrough(request, body, raw_body=raw_body)
+
+    if streaming:
+        return await _proxy_streaming(request, body, raw_body=raw_body)
+    return await _proxy_compressed(request, body, raw_body=raw_body)
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +125,12 @@ async def _handle_request(request: Request) -> Any:
 # ---------------------------------------------------------------------------
 
 
-async def _proxy_compressed(request: Request, body: dict[str, Any]) -> JSONResponse:
+async def _proxy_compressed(
+    request: Request,
+    body: dict[str, Any],
+    *,
+    raw_body: bytes,
+) -> JSONResponse:
     """Compress prompt structurally, forward to upstream, cool response."""
     global _memory_store
     cfg = quenching_config
@@ -111,8 +139,9 @@ async def _proxy_compressed(request: Request, body: dict[str, Any]) -> JSONRespo
 
     if not plan.spans or not cfg.multi_turn_enabled:
         # Nothing safe to compress (single-turn live query, all tool-heavy,
-        # or feature disabled) — pass through verbatim.
-        return await _proxy_passthrough(request, body)
+        # or feature disabled) — pass through verbatim using raw bytes so
+        # signed blocks elsewhere in the body survive the chain.
+        return await _proxy_passthrough(request, body, raw_body=raw_body)
 
     if cfg.memory_enabled and _memory_store is None:
         _memory_store = MemoryStore()
@@ -247,19 +276,31 @@ def _block_hash(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _proxy_passthrough(request: Request, body: dict[str, Any]) -> JSONResponse:
-    """Forward request unchanged — used when no spans are compressible."""
+async def _proxy_passthrough(
+    request: Request,
+    body: dict[str, Any],
+    *,
+    raw_body: bytes,
+) -> Response:
+    """Forward request unchanged — used when no spans are compressible.
+
+    Forwards the original raw bytes so any signed Anthropic content
+    blocks (thinking / redacted_thinking) survive untouched.  Returns
+    a generic ``Response`` to preserve the upstream content-type and
+    avoid re-encoding the body.
+    """
     upstream_url = _build_upstream_url(request)
     try:
         upstream_resp = await _get_client().post(
             upstream_url,
-            json=body,
+            content=raw_body,
             headers=_forward_headers(request),
             timeout=300.0,
         )
-        return JSONResponse(
-            content=upstream_resp.json() if upstream_resp.status_code == 200 else None,
+        return Response(
+            content=upstream_resp.content,
             status_code=upstream_resp.status_code,
+            media_type=upstream_resp.headers.get("content-type"),
         )
     except httpx.TimeoutException:
         return JSONResponse(status_code=504, content={"error": "Upstream timeout"})
@@ -268,13 +309,17 @@ async def _proxy_passthrough(request: Request, body: dict[str, Any]) -> JSONResp
 
 
 async def _proxy_streaming(
-    request: Request, body: dict[str, Any]
+    request: Request,
+    body: dict[str, Any],
+    *,
+    raw_body: bytes,
 ) -> StreamingResponse:
-    """Pass streaming requests through, preserving the original request path.
+    """Pass streaming requests through with raw bytes + original path.
 
-    We do NOT compress streaming requests in this version — multi-turn
-    structural compression is non-trivial to reconcile with SSE and the
-    win is small (streaming bodies tend to be short).
+    We do NOT compress streaming requests — multi-turn structural
+    compression is hard to reconcile with SSE and would break signed
+    blocks anyway.  Using ``content=raw_body`` keeps thinking-block
+    signatures intact.
     """
     upstream_url = _build_upstream_url(request)
     headers = _forward_headers(request)
@@ -284,7 +329,7 @@ async def _proxy_streaming(
             async with _get_client().stream(
                 "POST",
                 upstream_url,
-                json=body,
+                content=raw_body,
                 headers=headers,
                 timeout=600.0,
             ) as upstream_resp:
