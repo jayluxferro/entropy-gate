@@ -9,21 +9,14 @@
 cd entropy-gate
 uv sync
 
-# Run with default profile (best), forwarding to DeepSeek
-uv run python -m entropy_gate.cli --port 8080 --upstream https://api.deepseek.com/anthropic
+# Run with default profile
+uv run python -m entropy_gate.cli --port 8080 --upstream http://localhost:11434/v1
 
-# Run with a specific profile
-uv run python -m entropy_gate.cli --profile maximum --port 8080 --upstream https://api.deepseek.com/anthropic
+# For agentic/tool-using pipelines, use mild profile
+uv run python -m entropy_gate.cli --profile mild --port 8080 --upstream http://localhost:11434/v1
 
-# Run with memory-aware compression (cross-request dedup)
-uv run python -m entropy_gate.cli --profile best --memory --port 8080 --upstream https://api.deepseek.com/anthropic
-
-# Run with explicit parameters
-uv run python -m entropy_gate.cli \
-  --cooling-rate 0.3 \
-  --similarity-threshold 0.80 \
-  --port 8080 \
-  --upstream http://localhost:11434/v1
+# With cross-request memory-aware compression
+uv run python -m entropy_gate.cli --profile best --memory --port 8080 --upstream http://localhost:11434/v1
 ```
 
 ## How It Works
@@ -35,24 +28,41 @@ uv run python -m entropy_gate.cli \
 5. **Output Quenching** — optionally compresses upstream responses before returning
 6. **Memory-Aware Compression** (optional) — cross-request block dedup via external memory
 
+### Agent-Safe Design
+
+- **System messages pass through verbatim** — never compressed (tool definitions, capability surface)
+- **Multi-turn conversations pass through** — only the first user message in a session is compressed
+- **Short prompts (< 50 tokens) pass through** — below the minimum compression threshold (Theorem 10)
+
 ## Pre-set Profiles
 
-| Profile | α | θ | Use Case | Typical CR |
-|---|---|---|---|---|
-| `maximum` | 0.5 | 0.72 | Batch processing, cost-critical | 55-65% |
-| `best` | 0.3 | 0.80 | **Recommended default** | 45-55% |
-| `mild` | 0.15 | 0.90 | Interactive use, max fidelity | 30-42% |
-| `code` | 0.2 | 0.85 | Code-heavy prompts | 40-50% |
-| `system` | 0.6 | 0.72 | System prompts | 55-65% |
-| `output` | 0.8 | 0.68 | Response quenching | 70-80% |
-| `mcp` | 0.15 | 0.88 | MCP tool preservation | 20-35% |
+| Profile | α | θ | Min Tokens | Use Case | Typical CR |
+|---|---|---|---|---|---|
+| `maximum` | 0.5 | 0.72 | 30 | Batch processing, cost-critical | 55-65% |
+| `best` | 0.25 | 0.85 | 50 | Single-turn QA and stateless use | 30-45% |
+| `mild` | 0.15 | 0.90 | 100 | **Agentic/tool-using pipelines** | 15-30% |
+| `code` | 0.2 | 0.85 | 30 | Code-heavy prompts | 40-50% |
+| `system` | 0.6 | 0.72 | 30 | System prompts (highly redundant) | 55-65% |
+| `output` | 0.8 | 0.68 | 30 | Response quenching | 70-80% |
+| `mcp` | 0.15 | 0.88 | 80 | MCP tool preservation | 20-35% |
+
+**For agentic workflows**, use `mild` or `mcp`. These profiles preserve task-specific details that agents need for tool selection and file operations.
 
 ## API
 
-Entropy Gate exposes an OpenAI-compatible `/v1/chat/completions` endpoint.
+Entropy Gate serves both OpenAI-compatible and Anthropic-compatible endpoints.
 
 ```bash
+# OpenAI-compatible
 curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "any",
+    "messages": [{"role": "user", "content": "Your prompt here"}]
+  }'
+
+# Anthropic-compatible
+curl http://localhost:8080/v1/messages \
   -H "Content-Type: application/json" \
   -d '{
     "model": "any",
@@ -60,26 +70,15 @@ curl http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-Responses include compression metadata:
+Responses include compression metadata in `_entropy_gate`:
 ```json
 {
   "_entropy_gate": {
-    "compression_ratio": 0.53,
-    "tokens_kept": 22,
-    "tokens_total": 48,
-    "similarity_score": 0.825,
+    "compression_ratio": 0.42,
+    "tokens_kept": 68,
+    "tokens_total": 118,
+    "similarity_score": 0.868,
     "quenching_steps": 4
-  }
-}
-```
-
-With `--memory` enabled, additional fields:
-```json
-{
-  "_entropy_gate": {
-    "memory_reduction": 0.49,
-    "memory_tokens_saved": 34,
-    "total_reduction": 0.36
   }
 }
 ```
@@ -92,9 +91,10 @@ All parameters configurable via CLI flags, environment variables, or YAML:
 # config.yaml
 quenching:
   temperature_initial: 1.0
-  cooling_rate: 0.3
-  similarity_threshold: 0.80
+  cooling_rate: 0.25
+  similarity_threshold: 0.85
   memory_enabled: false
+  min_tokens: 50
 energy_weights:
   w_statistical: 0.5
   w_structural: 0.3
@@ -114,28 +114,35 @@ Agent / Client  ──▶   ┌────────── Entropy Gate ─�
                       │                    ▲             │
                       └────────────────────┼─────────────┘
                                    output quench (response)
+
+System messages:    UNTOUCHED (verbatim passthrough)
+Multi-turn convos:  UNTOUCHED (passthrough)
+First user message: COMPRESSED (entropy quenching)
 ```
-
-## Streaming
-
-Streaming requests (`stream: true`) pass through without compression — the full prompt must be available for entropy quenching.
-
-## Phase 2 (Semantic)
-
-Set `--use-model-energy` to enable model-derived energy via llama-server on gemma3:270m. Requires `llama-server` binary and GGUF model.
 
 ## Manifold Pipeline Integration
 
 ```yaml
 - name: entropy-gate
   directory: /path/to/entropy-gate
-  command: uv run python -m entropy_gate.cli --port {port} --upstream {upstream} --profile best
+  command: uv run python -m entropy_gate.cli --port {port} --upstream {upstream} --profile mild
   port: 7787
   health: /health
   upstream_via: cli_arg
   enabled: true
 ```
 
+## Phase 2 (Semantic)
+
+Set environment variables to enable model-derived energy via llama.cpp:
+
+```bash
+export ENTROPY_GATE_GGUF_MODEL=/path/to/model.gguf
+export ENTROPY_GATE_LLAMA_SERVER=/path/to/llama-server
+```
+
+Requires a GGUF model file (gemma3:270m or similar) and `llama-server` binary.
+
 ## License
 
-See LICENSE file.
+MIT — see [LICENSE](LICENSE).
