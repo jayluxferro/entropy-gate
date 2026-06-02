@@ -285,5 +285,6 @@ def turn_temperature(
     if beyond_protected == 0:
         return t0
     factor = max(0.0, min(1.0, decay**beyond_protected))
-    # Floor at a tiny non-zero so quench still runs (avoids T=0 division).
-    return max(t0 * factor, t0 * 0.05)
+    # Floor at t0 * 0.15 — below this, compression destroys task-critical
+    # context even when S_E reports adequate fidelity (see paper Sec. 5.3).
+    return max(t0 * factor, t0 * 0.15)

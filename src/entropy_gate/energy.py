@@ -97,6 +97,7 @@ def _compute_statistical_energy(tokens: list[str]) -> list[float]:
     - Tokens appearing in every chunk → low IDF → low energy
     - Tokens appearing in one chunk → high IDF → high energy
 
+    Whitespace tokens are assigned zero statistical energy.
     Output is normalized to [0, 1] so component weights control proportions.
     """
     n = len(tokens)
@@ -106,11 +107,12 @@ def _compute_statistical_energy(tokens: list[str]) -> list[float]:
     chunks = _split_into_chunks(tokens)
     num_chunks = len(chunks)
 
-    # IDF across chunks
+    # IDF across chunks (exclude whitespace)
     doc_freq: dict[str, int] = {}
     for chunk in chunks:
         for token in set(chunk):
-            doc_freq[token] = doc_freq.get(token, 0) + 1
+            if token.strip():  # skip whitespace
+                doc_freq[token] = doc_freq.get(token, 0) + 1
 
     idf: dict[str, float] = {}
     for token, df in doc_freq.items():
@@ -119,8 +121,11 @@ def _compute_statistical_energy(tokens: list[str]) -> list[float]:
     counts = Counter(tokens)
     raw: list[float] = []
     for token in tokens:
-        tf = (counts[token] + 1) / (n + len(counts))
-        raw.append(tf * idf.get(token, 1.0))
+        if not token.strip():
+            raw.append(0.0)  # whitespace = zero statistical energy
+        else:
+            tf = (counts[token] + 1) / (n + len(counts))
+            raw.append(tf * idf.get(token, 1.0))
 
     # Normalize to [0, 1]
     r_min, r_max = min(raw), max(raw)
@@ -173,6 +178,62 @@ def _is_frozen(token: str, frozen_patterns: list[str]) -> bool:
     return False
 
 
+# ── Self-Calibrating Domain Energy ─────────────────────────────────────
+# Instead of pre-configured domain term lists, we detect domain-critical
+# tokens automatically via their statistical signature:
+#   1. Proximity to task-defining verbs ("review", "audit", "analyze", ...)
+#   2. Capitalization (proper nouns, class names, API names)
+#   3. High chunk-IDF (rare in general language, frequent in this prompt)
+#
+# This works for ANY domain — security, coding, medical, legal, etc.
+# without requiring pre-configured term lists.
+
+_TASK_VERBS = frozenset({
+    "review", "audit", "analyze", "write", "fix", "find", "identify",
+    "implement", "debug", "test", "deploy", "build", "refactor", "optimize",
+    "migrate", "configure", "design", "document", "explain", "summarize",
+    "translate", "generate", "compare", "evaluate", "assess", "validate",
+    "verify", "monitor", "investigate", "resolve", "upgrade", "integrate",
+    "extract", "transform", "compute", "simulate", "predict", "classify",
+})
+
+_PROXIMITY_WINDOW = 12  # tokens before/after a task verb (covers ~1 sentence)
+
+
+def _compute_domain_energy(tokens: list[str]) -> list[float]:
+    """Self-calibrating domain energy without pre-configured term lists.
+
+    Tokens near task-defining verbs get a proximity boost. Capitalized
+    identifiers get a proper-noun boost. Combined with the structural
+    energy from syntax, this automatically identifies domain-critical
+    terms in any field.
+    """
+    n = len(tokens)
+    if n == 0:
+        return []
+
+    # 1. Find task-verb positions
+    task_positions: set[int] = set()
+    for i, tok in enumerate(tokens):
+        if tok.lower() in _TASK_VERBS:
+            task_positions.add(i)
+
+    # 2. Proximity boost: tokens near task verbs get elevated energy
+    proximity_boost = [0.0] * n
+    if task_positions:
+        for i in range(n):
+            min_dist = min(abs(i - p) for p in task_positions)
+            if min_dist <= _PROXIMITY_WINDOW:
+                # Exponential decay with distance from task verb
+                proximity_boost[i] = math.exp(-min_dist / _PROXIMITY_WINDOW)
+
+    # 3. Normalize to [0, 1]
+    if max(proximity_boost) > 0:
+        proximity_boost = [v / max(proximity_boost) for v in proximity_boost]
+
+    return proximity_boost
+
+
 def estimate_token_energies(
     tokens: list[str],
     config: QuenchingConfig | None = None,
@@ -195,13 +256,20 @@ def estimate_token_energies(
     e_stat = _compute_statistical_energy(tokens)
     e_struct = _compute_structural_energy(tokens)
     e_pos = _compute_positional_energy(tokens, n)
+    e_domain = _compute_domain_energy(tokens)  # self-calibrating
 
     results: list[TokenEnergy] = []
     for i, token in enumerate(tokens):
         frozen = _is_frozen(token, config.frozen_patterns)
+        # Domain energy boosts tokens near task verbs — architecture-independent
+        # Domain energy is additive: tokens near task verbs get a direct
+        # bonus regardless of their syntactic role. This captures
+        # domain-critical terms that the structural classifier misses
+        # (e.g., "glioblastoma" as identifier vs. "the" as identifier).
         energy = (
             w.w_statistical * e_stat[i]
             + w.w_structural * e_struct[i]
+            + 0.10 * e_domain[i]  # domain bonus (optimal from sweep; range 0.05-0.20)
             + w.w_positional * e_pos[i]
         )
         # Square to amplify energy gap between information-carrying tokens

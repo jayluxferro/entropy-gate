@@ -134,7 +134,25 @@ def quench(
         T = T0 / (1.0 + config.cooling_rate * tau)
 
         if config.survival_mode == "boltzmann":
-            survivors = _boltzmann_survival(token_energies, T, k)
+            # Boltzmann is stochastic — run multiple trials per step and
+            # keep the best (highest similarity that still compresses).
+            best_trial_sim = 0.0
+            best_trial_survivors = survivors = None
+            for _ in range(5):  # 5 trials per temperature step
+                candidates = _boltzmann_survival(token_energies, T, k)
+                if len(candidates) <= len(best_survivors) if best_survivors else False:
+                    continue  # no improvement in compression
+                trial_compressed = _reconstruct_text(candidates)
+                energy_map = {te.token: te.energy for te in token_energies}
+                trial_sim = energy_weighted_similarity(
+                    [te.token for te in token_energies],
+                    [te.token for te in candidates],
+                    energy_map,
+                )
+                if trial_sim >= config.similarity_threshold and trial_sim > best_trial_sim:
+                    best_trial_sim = trial_sim
+                    best_trial_survivors = candidates
+            survivors = best_trial_survivors if best_trial_survivors else _energy_cutoff(token_energies, T, T0)
         else:
             survivors = _energy_cutoff(token_energies, T, T0)
 
