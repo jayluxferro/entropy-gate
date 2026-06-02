@@ -109,7 +109,7 @@ Environment variables: `ENTROPY_GATE_COOLING_RATE`, `ENTROPY_GATE_SIMILARITY_THR
 ## Architecture
 
 ```
-Agent / Client  ──▶  ┌────────── Entropy Gate ──────────┐  ──▶  Upstream LLM
+Agent / Client  ──▶   ┌────────── Entropy Gate ──────────┐  ──▶  Upstream LLM
                       │  Dedup → Energy → Quench → Gate  │
                       │                    ▲             │
                       └────────────────────┼─────────────┘
