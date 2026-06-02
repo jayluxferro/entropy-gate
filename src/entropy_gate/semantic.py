@@ -18,16 +18,25 @@ from typing import Any
 
 import httpx
 
-# Known GGUF model paths (Ollama blobs, standard GGUF format)
-DEFAULT_MODEL_PATH = (
-    "/Users/jay/.ollama/models/blobs/"
-    "sha256-735af2139dc652bf01112746474883d79a52fa1c19038265d363e3d42556f7a2"
+# Model paths: use environment variables with sensible defaults.
+# ENTROPY_GATE_GGUF_MODEL — path to GGUF model file for logprobs
+# ENTROPY_GATE_LLAMA_SERVER — path to llama-server binary
+# ENTROPY_GATE_OLLAMA_URL — Ollama base URL
+# ENTROPY_GATE_EMBEDDING_MODEL — embedding model name
+
+import os as _os
+
+DEFAULT_MODEL_PATH = _os.environ.get("ENTROPY_GATE_GGUF_MODEL", "")
+DEFAULT_LLAMA_SERVER = _os.environ.get(
+    "ENTROPY_GATE_LLAMA_SERVER",
+    "llama-server",  # try PATH first
 )
-DEFAULT_LLAMA_SERVER = (
-    "/Users/jay/dev/ml/mcp/ollama-forge/llama.cpp/build/bin/llama-server"
+DEFAULT_OLLAMA_URL = _os.environ.get(
+    "ENTROPY_GATE_OLLAMA_URL", "http://localhost:11434"
 )
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+DEFAULT_EMBEDDING_MODEL = _os.environ.get(
+    "ENTROPY_GATE_EMBEDDING_MODEL", "nomic-embed-text"
+)
 
 
 class LogprobEnergyEstimator:
