@@ -28,6 +28,43 @@ _TOKENIZE_RE = re.compile(
 _LOW_INFO_SYMBOLS = frozenset("{}[](),:;.")
 
 
+# Math-mode and notation protection: $...$, $$...$$, and non-delimited notation
+# patterns (^, _, \frac, \sqrt, units like m/s^2) are preserved as single tokens
+_MATH_SPAN_RE = re.compile(r'(\$\$?)(.*?)\1', re.DOTALL)
+
+# Note: only $...$ and $$...$$ math spans are protected.
+# Non-delimited notation (e.g., m/s^2, x^2) is left to the
+# tokenizer and structural classifier. Subword tokenization
+# (Phase 2) natively handles these patterns.
+
+
+def _protect_math_spans(text: str) -> tuple[str, dict[str, str]]:
+    """Replace math/notation spans with placeholders."""
+    placeholders: dict[str, str] = {}
+    counter = [0]
+
+    def _replace(m: re.Match) -> str:
+        key = f"__MATH_{counter[0]}__"
+        counter[0] += 1
+        placeholders[key] = m.group(0)
+        return f" {key} "
+
+    # Protect $...$ math spans
+    processed = _MATH_SPAN_RE.sub(_replace, text)
+    return processed, placeholders
+
+
+def _restore_math_spans(tokens: list[str], placeholder_map: dict[str, str]) -> list[str]:
+    """Replace math placeholder tokens with the original math spans."""
+    result: list[str] = []
+    for tok in tokens:
+        if tok in placeholder_map:
+            result.append(placeholder_map[tok])
+        else:
+            result.append(tok)
+    return result
+
+
 def tokenize(text: str) -> list[str]:
     """Split text into tokens at word and punctuation boundaries.
 
@@ -35,18 +72,24 @@ def tokenize(text: str) -> list[str]:
       login(username,  →  login, (, username, (
       {"type":"object"} →  {, "type", :, "object", }
 
+    LaTeX math spans ($...$, $$...$$) are preserved as single tokens.
     String literals are kept intact. Whitespace tokens are included
     but assigned near-zero energy by the structural classifier.
     """
+    # Protect math spans before tokenizing
+    processed, math_map = _protect_math_spans(text)
+
     tokens: list[str] = []
-    for m in _TOKENIZE_RE.finditer(text):
+    for m in _TOKENIZE_RE.finditer(processed):
         token = m.group(0)
-        # Collapse whitespace to single space token
         if m.lastgroup == "space":
             if tokens and tokens[-1] != " ":
                 tokens.append(" ")
             continue
         tokens.append(token)
+
+    # Restore math spans and freeze them
+    tokens = _restore_math_spans(tokens, math_map)
     return tokens
 
 
@@ -171,7 +214,14 @@ def _compute_positional_energy(tokens: list[str], n: int) -> list[float]:
 
 
 def _is_frozen(token: str, frozen_patterns: list[str]) -> bool:
-    """Check if token matches any frozen (protected) pattern."""
+    """Check if token matches any frozen (protected) pattern.
+
+    Math spans ($...$, $$...$$) are always frozen.
+    """
+    if token.startswith("$") and token.endswith("$"):
+        return True
+    if token.startswith("$$") and token.endswith("$$"):
+        return True
     for pattern in frozen_patterns:
         if re.search(pattern, token):
             return True
