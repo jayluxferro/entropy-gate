@@ -158,7 +158,17 @@ async def _proxy_compressed(
             headers=_forward_headers(request),
             timeout=300.0,
         )
-        upstream_resp.raise_for_status()
+        if upstream_resp.status_code >= 400:
+            # Propagate the real status code + body so the agent sees
+            # rate limits (429), auth errors (401), etc. — not a generic 502.
+            try:
+                err_data = upstream_resp.json()
+            except Exception:
+                err_data = {"error": upstream_resp.text[:1024]}
+            return JSONResponse(
+                status_code=upstream_resp.status_code,
+                content=err_data,
+            )
         upstream_data = upstream_resp.json()
     except httpx.HTTPError as exc:
         return JSONResponse(
