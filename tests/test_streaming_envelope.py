@@ -14,6 +14,8 @@ no real network is used.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from typing import Any
 
 import httpx
@@ -127,6 +129,25 @@ class _StreamingHappyTransport(httpx.AsyncBaseTransport):
             200,
             headers={"Content-Type": "text/event-stream"},
             stream=_ControllableSSEStream(self._resume_event),
+        )
+
+
+class _EmptyStrReadErrorStream(httpx.AsyncByteStream):
+    """Yields one complete frame, then raises httpx.ReadError with an EMPTY str."""
+
+    async def __aiter__(self) -> Any:
+        yield b'event: message_start\ndata: {}\n\n'
+        raise httpx.ReadError("")
+
+
+class _EmptyStrReadErrorTransport(httpx.AsyncBaseTransport):
+    """Returns a 200 SSE stream that yields one frame then abruptly closes."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=_EmptyStrReadErrorStream(),
         )
 
 
@@ -264,6 +285,65 @@ async def test_mid_stream_reset_emits_terminal_openai_error_frame() -> None:
     assert frames, "received zero complete frames"
     assert any("data: [DONE]" in f for f in frames), "missing [DONE] terminator"
     assert any('data: {"error"' in f for f in frames), "missing terminal error data frame"
+
+
+async def test_mid_stream_empty_str_error_is_typed_in_anthropic_frame_and_log(caplog) -> None:
+    """Regression: an abrupt upstream close surfaces as httpx.ReadError whose
+    str() is EMPTY.  The terminal frame and the warning log must still name
+    the exception type — otherwise the failure is invisible."""
+    _install_mock(_EmptyStrReadErrorTransport())
+
+    with caplog.at_level(logging.WARNING, logger="entropy_gate.proxy"):
+        async with await _app_client() as client:
+            response = await client.post(
+                "/v1/messages",
+                json={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
+                headers={"x-api-key": "sk"},
+                timeout=10.0,
+            )
+
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").startswith("text/event-stream")
+    events = [e.strip() for e in response.text.strip().split("\n\n") if e.strip()]
+    assert events, "received zero complete frames"
+    last_event = events[-1]
+    assert last_event.startswith("event: error")
+    data_line = next(line for line in last_event.splitlines() if line.startswith("data: "))
+    body = json.loads(data_line[len("data: ") :])
+    assert body["error"]["message"].startswith("ReadError")
+    assert any(
+        "mid-stream failure" in r.getMessage() and "ReadError" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+async def test_mid_stream_empty_str_error_is_typed_in_openai_frame_and_log(caplog) -> None:
+    """Regression: OpenAI-flavor terminal frame must also name the exception type."""
+    _install_mock(_EmptyStrReadErrorTransport())
+
+    with caplog.at_level(logging.WARNING, logger="entropy_gate.proxy"):
+        async with await _app_client() as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
+                headers={"Authorization": "Bearer sk"},
+                timeout=10.0,
+            )
+
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").startswith("text/event-stream")
+    frames = [f.strip() for f in response.text.strip().split("\n\n") if f.strip()]
+    assert frames, "received zero complete frames"
+    assert any("data: [DONE]" in f for f in frames), "missing [DONE] terminator"
+    error_frames = [f for f in frames if 'data: {"error"' in f]
+    assert error_frames, "missing terminal error data frame"
+    data_line = next(line for line in error_frames[0].splitlines() if line.startswith("data: "))
+    body = json.loads(data_line[len("data: ") :])
+    assert body["error"]["message"].startswith("ReadError")
+    assert any(
+        "mid-stream failure" in r.getMessage() and "ReadError" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------

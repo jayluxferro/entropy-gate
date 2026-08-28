@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from typing import Any
 
@@ -49,6 +50,8 @@ quenching_config: QuenchingConfig = QuenchingConfig()
 server_config: ServerConfig = ServerConfig()
 _http_client: httpx.AsyncClient | None = None
 _memory_store: MemoryStore | None = None
+
+log = logging.getLogger(__name__)
 
 # Hop-by-hop headers (RFC 7230 + httpx-managed) that must never be forwarded.
 _HOP_BY_HOP = frozenset(
@@ -379,10 +382,24 @@ async def _proxy_streaming(
     path = request.url.path
 
     async def _stream_body():
+        t0 = time.monotonic()
+        nbytes = 0
         try:
             async for chunk in upstream_resp.aiter_bytes():
+                nbytes += len(chunk)
                 yield chunk
-        except httpx.HTTPError as exc:
+        except Exception as exc:  # noqa: BLE001 — Gate 2 must catch any mid-stream failure
+            # An abrupt upstream close surfaces as httpx.ReadError wrapping
+            # anyio.EndOfStream — str(exc) is EMPTY, so always prefix the
+            # exception type; without it both this log line and the
+            # client-visible terminal frame carry no information.
+            detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
+            log.warning(
+                "entropy-gate: mid-stream failure after %.1fs / %dB: %s",
+                time.monotonic() - t0,
+                nbytes,
+                detail,
+            )
             # Preserve the API-specific SSE framing. The leading \n\n
             # self-frames the terminal event when the upstream died mid-frame
             # (the partial line is terminated and its block dispatched first);
@@ -390,11 +407,11 @@ async def _proxy_streaming(
             if path.endswith("/v1/messages"):
                 frame = (
                     f"\n\nevent: error\ndata: "
-                    f"{json.dumps({'error': {'message': str(exc), 'type': 'upstream_error'}})}"
+                    f"{json.dumps({'error': {'message': detail, 'type': 'upstream_error'}})}"
                     "\n\n"
                 )
             else:
-                err_json = json.dumps({"error": {"message": str(exc), "type": "upstream_error"}})
+                err_json = json.dumps({"error": {"message": detail, "type": "upstream_error"}})
                 frame = f"\n\ndata: {err_json}\n\ndata: [DONE]\n\n"
             yield frame.encode()
         finally:
