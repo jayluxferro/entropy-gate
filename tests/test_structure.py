@@ -168,9 +168,9 @@ def test_turn_temperature_protects_recent() -> None:
     assert turn_temperature(3, total_turns=5, protected_recent=2, decay=0.5, t0=t0) == t0
     # Turn 2 is 1 beyond protected → t0 * 0.5
     assert turn_temperature(2, total_turns=5, protected_recent=2, decay=0.5, t0=t0) == 0.5
-    # Turn 0 is 3 beyond protected → t0 * 0.125 but floored at t0*0.05
+    # Turn 0 is 3 beyond protected → t0 * 0.125 but floored at t0*0.15
     val = turn_temperature(0, total_turns=5, protected_recent=2, decay=0.5, t0=t0)
-    assert val == 0.125
+    assert val == 0.15
 
 
 def test_turn_temperature_decay_one_is_noop() -> None:

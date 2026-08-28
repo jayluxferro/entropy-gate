@@ -31,7 +31,6 @@ from entropy_gate.memory import MemoryStore
 from entropy_gate.models import CompressionResult, QuenchingConfig, ServerConfig
 from entropy_gate.quenching import quench_output, quench_text
 from entropy_gate.structure import (
-    CompressibleSpan,
     MessagePlan,
     apply_compression,
     body_has_signed_blocks,
@@ -263,9 +262,7 @@ def _compress_spans(
         tokens_kept += len(compressed.split())
         spans_compressed += 1
 
-    compression_ratio = (
-        1.0 - (tokens_kept / tokens_original) if tokens_original > 0 else 0.0
-    )
+    compression_ratio = 1.0 - (tokens_kept / tokens_original) if tokens_original > 0 else 0.0
     audit = {
         "tokens_original": tokens_original,
         "tokens_kept": tokens_kept,
@@ -323,39 +320,89 @@ async def _proxy_streaming(
     body: dict[str, Any],
     *,
     raw_body: bytes,
-) -> StreamingResponse:
+) -> Response:
     """Pass streaming requests through with raw bytes + original path.
 
     We do NOT compress streaming requests — multi-turn structural
     compression is hard to reconcile with SSE and would break signed
     blocks anyway.  Using ``content=raw_body`` keeps thinking-block
     signatures intact.
+
+    Envelope gates:
+
+    * Gate 1: open the upstream stream, inspect headers *before* we commit
+      our own response.  If the upstream status is not 2xx or the response
+      is not ``text/event-stream``, drain the body and return a faithful
+      plain Response (status + content-type + body, retry-after preserved).
+      This prevents 4xx/5xx errors and empty bodies from being wrapped in
+      a misleading 200 SSE envelope.
+
+    * Gate 2: once we have committed to a 2xx SSE stream, a mid-stream
+      transport failure must not end with zero complete frames.  We emit
+      exactly one terminal error frame in the API-appropriate format.
     """
     upstream_url = _build_upstream_url(request)
     headers = _forward_headers(request)
+    client = _get_client()
 
-    async def stream_response():
+    # Connect-timeout for the pre-commit phase is handled by httpx; the
+    # streaming read timeout stays generous (600s) as before.
+    upstream_req = client.build_request(
+        "POST", upstream_url, content=raw_body, headers=headers, timeout=600.0
+    )
+
+    try:
+        upstream_resp = await client.send(upstream_req, stream=True)
+    except httpx.TimeoutException:
+        return JSONResponse(status_code=504, content={"error": "Upstream timeout"})
+    except httpx.HTTPError as exc:
+        return JSONResponse(status_code=502, content={"error": f"Upstream error: {exc}"})
+
+    status_code = upstream_resp.status_code
+    content_type = upstream_resp.headers.get("content-type", "")
+
+    # Gate 1: do not commit to SSE unless upstream proved it has one.
+    if status_code >= 400 or "text/event-stream" not in content_type.lower():
+        error_body = await upstream_resp.aread()
+        await upstream_resp.aclose()
+        passthrough_headers = {
+            k: v for k, v in upstream_resp.headers.items() if k.lower() not in _HOP_BY_HOP
+        }
+        return Response(
+            content=error_body,
+            status_code=status_code,
+            media_type=content_type or None,
+            headers=passthrough_headers,
+        )
+
+    # Gate 2: committed 2xx SSE stream — emit a terminal frame on mid-stream failure.
+    path = request.url.path
+
+    async def _stream_body():
         try:
-            async with _get_client().stream(
-                "POST",
-                upstream_url,
-                content=raw_body,
-                headers=headers,
-                timeout=600.0,
-            ) as upstream_resp:
-                if upstream_resp.status_code >= 400:
-                    # Surface upstream error body to the client.
-                    body_bytes = await upstream_resp.aread()
-                    yield body_bytes
-                    return
-                async for chunk in upstream_resp.aiter_bytes():
-                    yield chunk
+            async for chunk in upstream_resp.aiter_bytes():
+                yield chunk
         except httpx.HTTPError as exc:
-            error_chunk = json.dumps({"error": f"Upstream error: {exc}"})
-            yield f"data: {error_chunk}\n\n".encode()
+            # Preserve the API-specific SSE framing. The leading \n\n
+            # self-frames the terminal event when the upstream died mid-frame
+            # (the partial line is terminated and its block dispatched first);
+            # after a complete frame the extra blank lines are no-ops.
+            if path.endswith("/v1/messages"):
+                frame = (
+                    f"\n\nevent: error\ndata: "
+                    f"{json.dumps({'error': {'message': str(exc), 'type': 'upstream_error'}})}"
+                    "\n\n"
+                )
+            else:
+                err_json = json.dumps({"error": {"message": str(exc), "type": "upstream_error"}})
+                frame = f"\n\ndata: {err_json}\n\ndata: [DONE]\n\n"
+            yield frame.encode()
+        finally:
+            await upstream_resp.aclose()
 
     return StreamingResponse(
-        stream_response(),
+        _stream_body(),
+        status_code=status_code,
         media_type="text/event-stream",
         headers={"X-Entropy-Gate": "streaming-passthrough"},
     )
