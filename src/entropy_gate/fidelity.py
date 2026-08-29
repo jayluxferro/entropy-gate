@@ -28,8 +28,7 @@ def cosine_similarity(original: list[str], compressed: list[str]) -> float:
 
     total_weight = sum(orig_counts.values())
     preserved_weight = sum(
-        min(orig_c, comp_counts.get(token, 0))
-        for token, orig_c in orig_counts.items()
+        min(orig_c, comp_counts.get(token, 0)) for token, orig_c in orig_counts.items()
     )
 
     return preserved_weight / total_weight if total_weight > 0 else 0.0

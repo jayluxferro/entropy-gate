@@ -17,11 +17,11 @@ from entropy_gate.models import QuenchingConfig, EnergyWeights, TokenEnergy
 #   - String literals (quoted content grouped together)
 #   - Whitespace as separate tokens
 _TOKENIZE_RE = re.compile(
-    r"""(?P<string>'[^']*'|"[^"]*")"""   # string literals (single/double quoted)
+    r"""(?P<string>'[^']*'|"[^"]*")"""  # string literals (single/double quoted)
     r"""|(?P<word>[a-zA-Z_][a-zA-Z0-9_]*)"""  # identifiers / keywords
-    r"""|(?P<number>\d+\.?\d*)"""             # numeric literals
-    r"""|(?P<symbol>[^\s\w])"""              # individual symbols/punctuation
-    r"""|(?P<space>\s+)"""                    # whitespace
+    r"""|(?P<number>\d+\.?\d*)"""  # numeric literals
+    r"""|(?P<symbol>[^\s\w])"""  # individual symbols/punctuation
+    r"""|(?P<space>\s+)"""  # whitespace
 )
 
 # Characters that add minimal information as standalone tokens
@@ -30,7 +30,7 @@ _LOW_INFO_SYMBOLS = frozenset("{}[](),:;.")
 
 # Math-mode and notation protection: $...$, $$...$$, and non-delimited notation
 # patterns (^, _, \frac, \sqrt, units like m/s^2) are preserved as single tokens
-_MATH_SPAN_RE = re.compile(r'(\$\$?)(.*?)\1', re.DOTALL)
+_MATH_SPAN_RE = re.compile(r"(\$\$?)(.*?)\1", re.DOTALL)
 
 # Note: only $...$ and $$...$$ math spans are protected.
 # Non-delimited notation (e.g., m/s^2, x^2) is left to the
@@ -96,21 +96,24 @@ def tokenize(text: str) -> list[str]:
 # Structural token classification via regex patterns
 _TOKEN_PATTERNS: list[tuple[str, float]] = [
     # (regex, structural_energy)
-    (r'^\b(def|class|async|await|return|yield|if|else|elif|for|while|try|except|'
-     r'finally|with|import|from|as|raise|assert|break|continue|pass|lambda|'
-     r'nonlocal|global|del|match|case)\b$', 0.85),       # keywords
-    (r'^\b(True|False|None|self|cls)\b$', 0.55),         # built-in constants
-    (r'^[A-Z][a-zA-Z0-9_]*$', 0.78),                     # capitalized identifiers (proper nouns, classes)
-    (r'^[a-zA-Z_][a-zA-Z0-9_]*$', 0.65),                 # identifiers
-    (r'^\b(\d+\.?\d*|0x[0-9a-fA-F]+|0b[01]+)\b$', 0.45),  # literals (numbers)
-    (r'^[\'"].*[\'"]$', 0.40),                            # string literals
-    (r'^[+\-*/%=<>!&|^~@]+$', 0.30),                     # operators
-    (r'^[()[\]{},.:;#]$', 0.15),                          # punctuation / structural
-    (r'^\s+$', 0.0),                                      # whitespace
-    (r'^#[^\n]*$', 0.20),                                 # comments
+    (
+        r"^\b(def|class|async|await|return|yield|if|else|elif|for|while|try|except|"
+        r"finally|with|import|from|as|raise|assert|break|continue|pass|lambda|"
+        r"nonlocal|global|del|match|case)\b$",
+        0.85,
+    ),  # keywords
+    (r"^\b(True|False|None|self|cls)\b$", 0.55),  # built-in constants
+    (r"^[A-Z][a-zA-Z0-9_]*$", 0.78),  # capitalized identifiers (proper nouns, classes)
+    (r"^[a-zA-Z_][a-zA-Z0-9_]*$", 0.65),  # identifiers
+    (r"^\b(\d+\.?\d*|0x[0-9a-fA-F]+|0b[01]+)\b$", 0.45),  # literals (numbers)
+    (r'^[\'"].*[\'"]$', 0.40),  # string literals
+    (r"^[+\-*/%=<>!&|^~@]+$", 0.30),  # operators
+    (r"^[()[\]{},.:;#]$", 0.15),  # punctuation / structural
+    (r"^\s+$", 0.0),  # whitespace
+    (r"^#[^\n]*$", 0.20),  # comments
     (r'^[\[\]{}<>():;_*=+\-/%$,.!?&|^~@#\'"\\]+$', 0.15),  # catch-all punctuation
     # MCP / schema headers (matched as identifiers but with higher structural role)
-    (r'^\b(Tool|Description|Parameters|Required)\b$', 0.80),  # MCP tool headers
+    (r"^\b(Tool|Description|Parameters|Required)\b$", 0.80),  # MCP tool headers
 ]
 
 
@@ -126,7 +129,7 @@ def _split_into_chunks(tokens: list[str], chunk_size: int = 30) -> list[list[str
     stride = max(chunk_size // 2, 1)
     chunks: list[list[str]] = []
     for start in range(0, len(tokens) - chunk_size + 1, stride):
-        chunks.append(tokens[start:start + chunk_size])
+        chunks.append(tokens[start : start + chunk_size])
     if not chunks:
         chunks.append(tokens)
     return chunks
@@ -238,14 +241,48 @@ def _is_frozen(token: str, frozen_patterns: list[str]) -> bool:
 # This works for ANY domain — security, coding, medical, legal, etc.
 # without requiring pre-configured term lists.
 
-_TASK_VERBS = frozenset({
-    "review", "audit", "analyze", "write", "fix", "find", "identify",
-    "implement", "debug", "test", "deploy", "build", "refactor", "optimize",
-    "migrate", "configure", "design", "document", "explain", "summarize",
-    "translate", "generate", "compare", "evaluate", "assess", "validate",
-    "verify", "monitor", "investigate", "resolve", "upgrade", "integrate",
-    "extract", "transform", "compute", "simulate", "predict", "classify",
-})
+_TASK_VERBS = frozenset(
+    {
+        "review",
+        "audit",
+        "analyze",
+        "write",
+        "fix",
+        "find",
+        "identify",
+        "implement",
+        "debug",
+        "test",
+        "deploy",
+        "build",
+        "refactor",
+        "optimize",
+        "migrate",
+        "configure",
+        "design",
+        "document",
+        "explain",
+        "summarize",
+        "translate",
+        "generate",
+        "compare",
+        "evaluate",
+        "assess",
+        "validate",
+        "verify",
+        "monitor",
+        "investigate",
+        "resolve",
+        "upgrade",
+        "integrate",
+        "extract",
+        "transform",
+        "compute",
+        "simulate",
+        "predict",
+        "classify",
+    }
+)
 
 _PROXIMITY_WINDOW = 12  # tokens before/after a task verb (covers ~1 sentence)
 
@@ -325,13 +362,15 @@ def estimate_token_energies(
         # Square to amplify energy gap between information-carrying tokens
         # and noise tokens. Justified: information content ∝ signal amplitude².
         energy_squared = energy * energy
-        results.append(TokenEnergy(
-            index=i,
-            token=token,
-            energy=energy_squared if not frozen else float("inf"),
-            frozen=frozen,
-            energy_statistical=e_stat[i],
-            energy_structural=e_struct[i],
-            energy_positional=e_pos[i],
-        ))
+        results.append(
+            TokenEnergy(
+                index=i,
+                token=token,
+                energy=energy_squared if not frozen else float("inf"),
+                frozen=frozen,
+                energy_statistical=e_stat[i],
+                energy_structural=e_struct[i],
+                energy_positional=e_pos[i],
+            )
+        )
     return results

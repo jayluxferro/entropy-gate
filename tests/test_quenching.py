@@ -97,6 +97,7 @@ def test_reconstruct_text_basic():
 
 def test_reconstruct_text_collapses_consecutive_duplicates():
     from entropy_gate.models import TokenEnergy
+
     energies = [
         TokenEnergy(index=0, token="import", energy=1.0),
         TokenEnergy(index=1, token="import", energy=1.0),
@@ -109,6 +110,7 @@ def test_reconstruct_text_collapses_consecutive_duplicates():
 
 def test_reconstruct_text_preserves_order():
     from entropy_gate.models import TokenEnergy
+
     energies = [
         TokenEnergy(index=3, token="world", energy=1.0),
         TokenEnergy(index=0, token="hello", energy=1.0),
@@ -130,7 +132,9 @@ def test_quench_deterministic():
 
 def test_quench_boltzmann():
     config = QuenchingConfig(
-        similarity_threshold=0.80, cooling_rate=0.3, survival_mode="boltzmann",
+        similarity_threshold=0.80,
+        cooling_rate=0.3,
+        survival_mode="boltzmann",
         min_tokens=10,
     )
     tokens = SAMPLE_TOKENS
@@ -188,9 +192,11 @@ def test_quench_output_short_text():
 
 def test_quench_output_long_text():
     config = QuenchingConfig(output_cooling=True, cooling_rate=0.8, min_tokens=10)
-    text = ("Certainly I would be happy to help with your question about code "
-            "review and security analysis. Let me carefully examine the provided "
-            "source code for potential vulnerabilities. ") * 8
+    text = (
+        "Certainly I would be happy to help with your question about code "
+        "review and security analysis. Let me carefully examine the provided "
+        "source code for potential vulnerabilities. "
+    ) * 8
     result = quench_output(text, config)
     # With aggressive output quenching, the result should be non-empty
     assert len(result) > 0

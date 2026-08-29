@@ -116,9 +116,7 @@ def test_estimate_token_energies_basic():
 
 
 def test_frozen_tokens_get_infinite_energy():
-    config = QuenchingConfig(
-        frozen_patterns=[r"KEY_.*", r"\[REDACTED_[a-f0-9]{8}\]"]
-    )
+    config = QuenchingConfig(frozen_patterns=[r"KEY_.*", r"\[REDACTED_[a-f0-9]{8}\]"])
     tokens = ["def", "KEY_SECRET", "hello", "[REDACTED_1234abcd]", "world"]
     results = estimate_token_energies(tokens, config)
     assert results[1].frozen  # KEY_SECRET
@@ -141,8 +139,12 @@ def test_energy_weights_effect():
     stat_results = estimate_token_energies(tokens, config_stat)
     full_results = estimate_token_energies(tokens, config_full)
     # Rankings should differ (structural gives keywords higher energy)
-    stat_ranks = sorted(range(len(stat_results)), key=lambda i: stat_results[i].energy, reverse=True)
-    full_ranks = sorted(range(len(full_results)), key=lambda i: full_results[i].energy, reverse=True)
+    stat_ranks = sorted(
+        range(len(stat_results)), key=lambda i: stat_results[i].energy, reverse=True
+    )
+    full_ranks = sorted(
+        range(len(full_results)), key=lambda i: full_results[i].energy, reverse=True
+    )
     assert stat_ranks != full_ranks
 
 

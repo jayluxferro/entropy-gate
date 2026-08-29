@@ -31,12 +31,8 @@ DEFAULT_LLAMA_SERVER = _os.environ.get(
     "ENTROPY_GATE_LLAMA_SERVER",
     "llama-server",  # try PATH first
 )
-DEFAULT_OLLAMA_URL = _os.environ.get(
-    "ENTROPY_GATE_OLLAMA_URL", "http://localhost:11434"
-)
-DEFAULT_EMBEDDING_MODEL = _os.environ.get(
-    "ENTROPY_GATE_EMBEDDING_MODEL", "nomic-embed-text"
-)
+DEFAULT_OLLAMA_URL = _os.environ.get("ENTROPY_GATE_OLLAMA_URL", "http://localhost:11434")
+DEFAULT_EMBEDDING_MODEL = _os.environ.get("ENTROPY_GATE_EMBEDDING_MODEL", "nomic-embed-text")
 
 
 class LogprobEnergyEstimator:
@@ -82,11 +78,16 @@ class LogprobEnergyEstimator:
         self._process = subprocess.Popen(
             [
                 self._server_binary,
-                "-m", self._model_path,
-                "--port", str(self._port),
-                "--host", "127.0.0.1",
-                "-ngl", "0",           # no GPU layers for tiny model
-                "-c", "4096",          # context window
+                "-m",
+                self._model_path,
+                "--port",
+                str(self._port),
+                "--host",
+                "127.0.0.1",
+                "-ngl",
+                "0",  # no GPU layers for tiny model
+                "-c",
+                "4096",  # context window
                 "--log-disable",
             ],
             stdout=subprocess.DEVNULL,
@@ -105,9 +106,7 @@ class LogprobEnergyEstimator:
                 pass
             time.sleep(0.5)
 
-        raise RuntimeError(
-            f"llama-server did not start within {timeout}s on port {self._port}"
-        )
+        raise RuntimeError(f"llama-server did not start within {timeout}s on port {self._port}")
 
     def estimate_logprobs(self, text: str) -> list[float]:
         """Get per-token -log P(t | context) from the model.

@@ -38,20 +38,20 @@ class MemoryCompressionResult:
     tokens_original: int
 
     # Memory layer
-    tokens_repeated: int       # tokens found in memory
-    tokens_novel: int          # tokens NOT in memory
-    memory_reduction: float    # R_mem = repeated / total
+    tokens_repeated: int  # tokens found in memory
+    tokens_novel: int  # tokens NOT in memory
+    memory_reduction: float  # R_mem = repeated / total
 
     # Quenching layer (applied to novel content only)
-    tokens_after_quench: int   # tokens after quenching novel content
-    quench_reduction: float    # R_quench = (novel - after_quench) / novel
+    tokens_after_quench: int  # tokens after quenching novel content
+    quench_reduction: float  # R_quench = (novel - after_quench) / novel
 
     # Combined
-    tokens_final: int          # final token count
-    total_reduction: float     # R_total = 1 - final / original
+    tokens_final: int  # final token count
+    total_reduction: float  # R_total = 1 - final / original
 
     # Theoretical bound from Theorem 9
-    theoretical_bound: float   # predicted R_total
+    theoretical_bound: float  # predicted R_total
 
     def summary(self) -> str:
         return (
@@ -114,7 +114,8 @@ class MemoryStore:
             "tokens_stored": total_tokens,
             "total_accesses": total_accesses,
             "hit_rate": total_accesses / (total_accesses + total_blocks)
-            if (total_accesses + total_blocks) > 0 else 0.0,
+            if (total_accesses + total_blocks) > 0
+            else 0.0,
         }
 
 
@@ -173,8 +174,7 @@ def memory_aware_compress(
     """
     # 1. Concatenate messages into blocks
     full_text = "\n\n".join(
-        msg.get("content", "") for msg in messages
-        if isinstance(msg.get("content", ""), str)
+        msg.get("content", "") for msg in messages if isinstance(msg.get("content", ""), str)
     )
 
     # Split into logical blocks at paragraph boundaries
@@ -206,13 +206,13 @@ def memory_aware_compress(
     # 3. Quenching layer: compress novel content
     if novel_text.strip() and novel_tokens_count > 10:
         from entropy_gate.energy import tokenize
+
         tokens = tokenize(novel_text)
         energies = energy_fn(tokens, config)
         result = quench_fn(tokens, energies, config)
         tokens_after_quench_count = result.tokens_kept
         quench_reduction = (
-            1.0 - tokens_after_quench_count / novel_tokens_count
-            if novel_tokens_count > 0 else 0.0
+            1.0 - tokens_after_quench_count / novel_tokens_count if novel_tokens_count > 0 else 0.0
         )
     else:
         tokens_after_quench_count = novel_tokens_count
@@ -224,14 +224,10 @@ def memory_aware_compress(
     tokens_final = int(reference_cost + tokens_after_quench_count)
 
     memory_reduction = (
-        (repeated_tokens - reference_cost) / total_tokens
-        if total_tokens > 0 else 0.0
+        (repeated_tokens - reference_cost) / total_tokens if total_tokens > 0 else 0.0
     )
 
-    total_reduction = (
-        1.0 - tokens_final / total_tokens
-        if total_tokens > 0 else 0.0
-    )
+    total_reduction = 1.0 - tokens_final / total_tokens if total_tokens > 0 else 0.0
 
     # Theorem 9 bound: R_total = 1 - (1-R_mem)(1-R_quench)
     theoretical_bound = 1.0 - (1.0 - memory_reduction) * (1.0 - quench_reduction)

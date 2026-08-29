@@ -229,9 +229,7 @@ def apply_compression(
     for i, msg in enumerate(src_messages):
         # Find replacements that target this message.
         msg_repls = {
-            block_idx: text
-            for (m_idx, block_idx), text in replacements.items()
-            if m_idx == i
+            block_idx: text for (m_idx, block_idx), text in replacements.items() if m_idx == i
         }
         if not msg_repls:
             new_messages.append(msg)

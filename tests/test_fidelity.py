@@ -1,6 +1,7 @@
 """Tests for fidelity safety gate."""
 
 import os
+
 os.environ["no_proxy"] = "127.0.0.1,localhost"
 os.environ["NO_PROXY"] = "127.0.0.1,localhost"
 
@@ -73,17 +74,14 @@ def test_energy_weighted_similarity_falls_back():
 
 
 def test_embedding_cosine_similarity_identical():
-    sim = embedding_cosine_similarity(
-        "def hello(): return 42",
-        "def hello(): return 42"
-    )
+    sim = embedding_cosine_similarity("def hello(): return 42", "def hello(): return 42")
     assert 0.9 <= sim <= 1.0
 
 
 def test_embedding_cosine_similarity_different():
     sim = embedding_cosine_similarity(
         "def process_data(input_stream): return results",
-        "the quick brown fox jumps over the lazy dog"
+        "the quick brown fox jumps over the lazy dog",
     )
     assert sim < 0.9
 

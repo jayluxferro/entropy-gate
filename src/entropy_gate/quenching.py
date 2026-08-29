@@ -152,7 +152,11 @@ def quench(
                 if trial_sim >= config.similarity_threshold and trial_sim > best_trial_sim:
                     best_trial_sim = trial_sim
                     best_trial_survivors = candidates
-            survivors = best_trial_survivors if best_trial_survivors else _energy_cutoff(token_energies, T, T0)
+            survivors = (
+                best_trial_survivors
+                if best_trial_survivors
+                else _energy_cutoff(token_energies, T, T0)
+            )
         else:
             survivors = _energy_cutoff(token_energies, T, T0)
 
@@ -247,6 +251,7 @@ def quench_output(text: str, config: QuenchingConfig | None = None) -> str:
         )
 
     from entropy_gate.energy import tokenize
+
     tokens = tokenize(text)
     if len(tokens) < 20:
         return text

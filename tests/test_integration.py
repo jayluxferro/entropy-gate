@@ -1,6 +1,7 @@
 """Integration tests for end-to-end compression pipeline."""
 
 import os
+
 os.environ["no_proxy"] = "127.0.0.1,localhost"
 os.environ["NO_PROXY"] = "127.0.0.1,localhost"
 
@@ -66,7 +67,9 @@ def test_full_pipeline_docs():
     energies = estimate_token_energies(tokens, config)
     result = quench(tokens, energies, config)
     assert result.compression_ratio > 0.15
-    assert "documentation" in result.compressed_text.lower() or "api" in result.compressed_text.lower()
+    assert (
+        "documentation" in result.compressed_text.lower() or "api" in result.compressed_text.lower()
+    )
 
 
 def test_pipeline_with_dedup():
@@ -116,10 +119,12 @@ def test_boltzmann_vs_deterministic():
     tokens = CODE_REVIEW.split()
     energies = estimate_token_energies(tokens, QuenchingConfig())
 
-    det_config = QuenchingConfig(similarity_threshold=0.80, cooling_rate=0.3,
-                                  survival_mode="deterministic")
-    bol_config = QuenchingConfig(similarity_threshold=0.70, cooling_rate=0.8,
-                                  survival_mode="boltzmann")
+    det_config = QuenchingConfig(
+        similarity_threshold=0.80, cooling_rate=0.3, survival_mode="deterministic"
+    )
+    bol_config = QuenchingConfig(
+        similarity_threshold=0.70, cooling_rate=0.8, survival_mode="boltzmann"
+    )
 
     det_result = quench(tokens, energies, det_config)
     assert det_result.similarity_score >= 0.80
@@ -132,8 +137,7 @@ def test_boltzmann_vs_deterministic():
 
 def test_frozen_protection_in_pipeline():
     config = QuenchingConfig(
-        similarity_threshold=0.80, cooling_rate=0.5,
-        frozen_patterns=[r"SECRET_.*", r"API_KEY_.*"]
+        similarity_threshold=0.80, cooling_rate=0.5, frozen_patterns=[r"SECRET_.*", r"API_KEY_.*"]
     )
     text = "def process(): SECRET_TOKEN = 'abc123'; return result"
     tokens = text.split()
@@ -162,8 +166,9 @@ def test_edge_case_empty():
 
 def test_edge_case_all_frozen():
     config = QuenchingConfig(
-        similarity_threshold=0.80, cooling_rate=0.7,
-        frozen_patterns=[r".*"]  # everything is frozen
+        similarity_threshold=0.80,
+        cooling_rate=0.7,
+        frozen_patterns=[r".*"],  # everything is frozen
     )
     text = "def hello(): return 42"
     tokens = text.split()

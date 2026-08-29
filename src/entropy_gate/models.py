@@ -26,16 +26,14 @@ class QuenchingConfig:
     """
 
     temperature_initial: float = 1.0
-    cooling_rate: float = 0.25          # alpha in T(tau) = T0 / (1 + alpha * tau)
+    cooling_rate: float = 0.25  # alpha in T(tau) = T0 / (1 + alpha * tau)
     similarity_threshold: float = 0.85
-    frozen_patterns: list[str] = field(
-        default_factory=lambda: [r"\[REDACTED_[a-f0-9]{8}\]"]
-    )
+    frozen_patterns: list[str] = field(default_factory=lambda: [r"\[REDACTED_[a-f0-9]{8}\]"])
     energy_weights: EnergyWeights = field(default_factory=EnergyWeights)
     output_cooling: bool = True
     dedup_enabled: bool = True
-    memory_enabled: bool = False      # cross-request memory-aware compression
-    min_tokens: int = 30              # skip compression for prompts shorter than this
+    memory_enabled: bool = False  # cross-request memory-aware compression
+    min_tokens: int = 30  # skip compression for prompts shorter than this
 
     # Phase 2: model-derived energy
     use_model_energy: bool = False
@@ -52,9 +50,9 @@ class QuenchingConfig:
 
     # Multi-turn / structural compression
     multi_turn_enabled: bool = True
-    protected_recent_turns: int = 2     # last N turns keep full temperature
-    turn_decay: float = 0.7             # T0 *= decay ** distance_beyond_protected
-    block_min_chars: int = 80           # skip blocks shorter than this
+    protected_recent_turns: int = 2  # last N turns keep full temperature
+    turn_decay: float = 0.7  # T0 *= decay ** distance_beyond_protected
+    block_min_chars: int = 80  # skip blocks shorter than this
     cross_turn_freeze_chars: int = 400  # hash & memoize blocks at least this large
 
 

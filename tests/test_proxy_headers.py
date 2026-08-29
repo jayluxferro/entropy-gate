@@ -105,7 +105,7 @@ def test_streaming_preserves_request_path() -> None:
             self.requests.append(request)
             return httpx.Response(
                 200,
-                content=b"data: {\"type\": \"message_start\"}\n\n",
+                content=b'data: {"type": "message_start"}\n\n',
                 headers={"Content-Type": "text/event-stream"},
             )
 

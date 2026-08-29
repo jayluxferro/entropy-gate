@@ -136,7 +136,7 @@ class _EmptyStrReadErrorStream(httpx.AsyncByteStream):
     """Yields one complete frame, then raises httpx.ReadError with an EMPTY str."""
 
     async def __aiter__(self) -> Any:
-        yield b'event: message_start\ndata: {}\n\n'
+        yield b"event: message_start\ndata: {}\n\n"
         raise httpx.ReadError("")
 
 

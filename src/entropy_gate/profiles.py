@@ -113,7 +113,9 @@ def mcp_safe() -> QuenchingConfig:
         energy_weights=EnergyWeights(w_statistical=0.35, w_structural=0.45, w_positional=0.20),
         frozen_patterns=[
             r"\[REDACTED_[a-f0-9]{8}\]",
-            r"^\bTool:\b", r"^\bDescription:\b", r"^\bParameters:\b",
+            r"^\bTool:\b",
+            r"^\bDescription:\b",
+            r"^\bParameters:\b",
         ],
         output_cooling=True,
         dedup_enabled=True,
