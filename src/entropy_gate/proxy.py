@@ -173,9 +173,15 @@ async def _proxy_compressed(
             )
         upstream_data = upstream_resp.json()
     except httpx.HTTPError as exc:
+        # Connect/send failures raise httpx exceptions whose str() is often
+        # EMPTY (ConnectTimeout, ReadError wrapping anyio.EndOfStream) —
+        # prefix the type or the client sees "Upstream error: " with nothing
+        # after the colon and the logs stay silent.
+        detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
+        log.warning("entropy-gate: upstream request to %s failed: %s", upstream_url, detail)
         return JSONResponse(
             status_code=502,
-            content={"error": f"Upstream error: {exc}"},
+            content={"error": f"Upstream error: {detail}"},
         )
 
     elapsed = time.time() - start_time
@@ -312,10 +318,20 @@ async def _proxy_passthrough(
             status_code=upstream_resp.status_code,
             media_type=upstream_resp.headers.get("content-type"),
         )
-    except httpx.TimeoutException:
-        return JSONResponse(status_code=504, content={"error": "Upstream timeout"})
+    except httpx.TimeoutException as exc:
+        # str(exc) is EMPTY for timeouts — name the type so the log line and
+        # the client message say WHICH timeout fired (connect vs read/pool).
+        detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
+        log.warning("entropy-gate: upstream timeout from %s: %s", upstream_url, detail)
+        return JSONResponse(
+            status_code=504, content={"error": f"Upstream timeout: {detail}"}
+        )
     except httpx.HTTPError as exc:
-        return JSONResponse(status_code=502, content={"error": f"Upstream error: {exc}"})
+        # See above: str(exc) is EMPTY for timeouts and abrupt closes, so
+        # always prefix the exception type.
+        detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
+        log.warning("entropy-gate: upstream request to %s failed: %s", upstream_url, detail)
+        return JSONResponse(status_code=502, content={"error": f"Upstream error: {detail}"})
 
 
 async def _proxy_streaming(
@@ -356,10 +372,20 @@ async def _proxy_streaming(
 
     try:
         upstream_resp = await client.send(upstream_req, stream=True)
-    except httpx.TimeoutException:
-        return JSONResponse(status_code=504, content={"error": "Upstream timeout"})
+    except httpx.TimeoutException as exc:
+        # str(exc) is EMPTY for timeouts — name the type so the log line and
+        # the client message say WHICH timeout fired (connect vs read/pool).
+        detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
+        log.warning("entropy-gate: upstream timeout from %s: %s", upstream_url, detail)
+        return JSONResponse(
+            status_code=504, content={"error": f"Upstream timeout: {detail}"}
+        )
     except httpx.HTTPError as exc:
-        return JSONResponse(status_code=502, content={"error": f"Upstream error: {exc}"})
+        # See above: str(exc) is EMPTY for timeouts and abrupt closes, so
+        # always prefix the exception type.
+        detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
+        log.warning("entropy-gate: upstream request to %s failed: %s", upstream_url, detail)
+        return JSONResponse(status_code=502, content={"error": f"Upstream error: {detail}"})
 
     status_code = upstream_resp.status_code
     content_type = upstream_resp.headers.get("content-type", "")

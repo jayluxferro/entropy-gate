@@ -387,3 +387,73 @@ async def test_streaming_happy_path_is_incremental_and_faithful() -> None:
     assert b"message_start" in full
     assert b"content_block_delta" in full
     assert b"hello" in full
+
+
+# ---------------------------------------------------------------------------
+# Connect-path failure (empty-str sibling of Gate 2)
+# ---------------------------------------------------------------------------
+
+
+class _ConnectTimeoutTransport(httpx.AsyncBaseTransport):
+    """Raises before any response — str(httpx.ConnectTimeout("")) is EMPTY."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("")
+
+
+async def test_passthrough_connect_failure_504_names_timeout_type(caplog) -> None:
+    """Regression: httpx timeouts have an EMPTY str() (anyio wrappers).  The
+    504 body and the warning log must still name WHICH timeout fired —
+    'Upstream timeout' alone could not distinguish connect from read."""
+    _install_mock(_ConnectTimeoutTransport())
+
+    async with await _app_client() as client:
+        with caplog.at_level(logging.WARNING, logger="entropy_gate.proxy"):
+            resp = await client.post(
+                "/v1/messages",
+                json={"stream": False, "messages": [{"role": "user", "content": "hi"}]},
+            )
+
+    assert resp.status_code == 504
+    assert resp.json()["error"] == "Upstream timeout: ConnectTimeout"
+    assert any("ConnectTimeout" in r.getMessage() for r in caplog.records)
+
+
+async def test_streaming_connect_failure_504_names_timeout_type(caplog) -> None:
+    """Same regression on the streaming connect path (client.send raises)."""
+    _install_mock(_ConnectTimeoutTransport())
+
+    async with await _app_client() as client:
+        with caplog.at_level(logging.WARNING, logger="entropy_gate.proxy"):
+            resp = await client.post(
+                "/v1/messages",
+                json={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
+            )
+
+    assert resp.status_code == 504
+    assert resp.json()["error"] == "Upstream timeout: ConnectTimeout"
+    assert any("ConnectTimeout" in r.getMessage() for r in caplog.records)
+
+
+async def test_compressed_connect_failure_502_names_exception_type(caplog) -> None:
+    """Same regression on the compression path (_proxy_compressed)."""
+    proxy_mod.quenching_config = QuenchingConfig(
+        multi_turn_enabled=True, block_min_chars=10
+    )
+    _install_mock(_ConnectTimeoutTransport())
+    body = {
+        "messages": [
+            {"role": "user", "content": "first user message " * 20},
+            {"role": "assistant", "content": "assistant reply " * 20},
+            {"role": "user", "content": "the live query " * 20},
+        ],
+        "stream": False,
+    }
+
+    async with await _app_client() as client:
+        with caplog.at_level(logging.WARNING, logger="entropy_gate.proxy"):
+            resp = await client.post("/v1/messages", json=body)
+
+    assert resp.status_code == 502
+    assert resp.json()["error"] == "Upstream error: ConnectTimeout"
+    assert any("ConnectTimeout" in r.getMessage() for r in caplog.records)
