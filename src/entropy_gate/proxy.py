@@ -323,9 +323,7 @@ async def _proxy_passthrough(
         # the client message say WHICH timeout fired (connect vs read/pool).
         detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
         log.warning("entropy-gate: upstream timeout from %s: %s", upstream_url, detail)
-        return JSONResponse(
-            status_code=504, content={"error": f"Upstream timeout: {detail}"}
-        )
+        return JSONResponse(status_code=504, content={"error": f"Upstream timeout: {detail}"})
     except httpx.HTTPError as exc:
         # See above: str(exc) is EMPTY for timeouts and abrupt closes, so
         # always prefix the exception type.
@@ -377,9 +375,7 @@ async def _proxy_streaming(
         # the client message say WHICH timeout fired (connect vs read/pool).
         detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
         log.warning("entropy-gate: upstream timeout from %s: %s", upstream_url, detail)
-        return JSONResponse(
-            status_code=504, content={"error": f"Upstream timeout: {detail}"}
-        )
+        return JSONResponse(status_code=504, content={"error": f"Upstream timeout: {detail}"})
     except httpx.HTTPError as exc:
         # See above: str(exc) is EMPTY for timeouts and abrupt closes, so
         # always prefix the exception type.
@@ -535,5 +531,6 @@ def _forward_headers(request: Request) -> dict[str, str]:
 def _get_client() -> httpx.AsyncClient:
     global _http_client
     if _http_client is None:
-        _http_client = httpx.AsyncClient()
+        # # keepalive_expiry=2.0: retire pooled connections before the upstream uvicorn's 5s idle close (stale-connection ReadError race, 2026-09-01).
+        _http_client = httpx.AsyncClient(limits=httpx.Limits(keepalive_expiry=2.0))
     return _http_client

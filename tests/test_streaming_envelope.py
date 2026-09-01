@@ -437,9 +437,7 @@ async def test_streaming_connect_failure_504_names_timeout_type(caplog) -> None:
 
 async def test_compressed_connect_failure_502_names_exception_type(caplog) -> None:
     """Same regression on the compression path (_proxy_compressed)."""
-    proxy_mod.quenching_config = QuenchingConfig(
-        multi_turn_enabled=True, block_min_chars=10
-    )
+    proxy_mod.quenching_config = QuenchingConfig(multi_turn_enabled=True, block_min_chars=10)
     _install_mock(_ConnectTimeoutTransport())
     body = {
         "messages": [
