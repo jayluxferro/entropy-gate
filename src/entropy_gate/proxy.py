@@ -93,6 +93,18 @@ async def messages(request: Request) -> Any:
     return await _handle_request(request)
 
 
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def passthrough(request: Request, path: str) -> Response:
+    """Catch-all raw passthrough (count_tokens, models, …).
+
+    Bypasses compression/dedup/memory entirely — the request reaches the
+    upstream byte-identical, original path and query intact, via the same
+    forwarder the chat surfaces use for non-compressible bodies.
+    """
+    raw_body = await request.body()
+    return await _proxy_passthrough(request, body={}, raw_body=raw_body)
+
+
 async def _handle_request(request: Request) -> Any:
     # Read the raw body up front so the passthrough / streaming / signed-block
     # paths can forward it byte-for-byte.  Anthropic validates ``thinking``
@@ -307,16 +319,21 @@ async def _proxy_passthrough(
     """
     upstream_url = _build_upstream_url(request)
     try:
-        upstream_resp = await _get_client().post(
+        upstream_resp = await _get_client().request(
+            request.method,
             upstream_url,
             content=raw_body,
             headers=_forward_headers(request),
             timeout=300.0,
         )
+        passthrough_headers = {
+            k: v for k, v in upstream_resp.headers.items() if k.lower() not in _HOP_BY_HOP
+        }
         return Response(
             content=upstream_resp.content,
             status_code=upstream_resp.status_code,
             media_type=upstream_resp.headers.get("content-type"),
+            headers=passthrough_headers,
         )
     except httpx.TimeoutException as exc:
         # str(exc) is EMPTY for timeouts — name the type so the log line and

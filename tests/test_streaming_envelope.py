@@ -151,6 +151,21 @@ class _EmptyStrReadErrorTransport(httpx.AsyncBaseTransport):
         )
 
 
+class _CapturingTransport(httpx.AsyncBaseTransport):
+    """Captures the outbound request; returns a fixed response or raises."""
+
+    def __init__(self, response: httpx.Response, *, error: Exception | None = None) -> None:
+        self._response = response
+        self.error = error
+        self.request: httpx.Request | None = None
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.request = request
+        if self.error is not None:
+            raise self.error
+        return self._response
+
+
 # ---------------------------------------------------------------------------
 # Gate 1 tests
 # ---------------------------------------------------------------------------
@@ -455,3 +470,56 @@ async def test_compressed_connect_failure_502_names_exception_type(caplog) -> No
     assert resp.status_code == 502
     assert resp.json()["error"] == "Upstream error: ConnectTimeout"
     assert any("ConnectTimeout" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Catch-all raw passthrough (count_tokens, models, …)
+# ---------------------------------------------------------------------------
+
+
+async def test_catch_all_count_tokens_raw_passthrough() -> None:
+    """POST /v1/messages/count_tokens reaches the upstream byte-identical
+    with its path, query string, and auth header — compression/dedup/memory
+    all bypassed."""
+    raw_body = json.dumps(
+        {"model": "claude-sonnet-4", "messages": [{"role": "user", "content": "hi"}]}
+    ).encode()
+    upstream_body = json.dumps({"input_tokens": 5}).encode()
+    transport = _CapturingTransport(
+        httpx.Response(200, content=upstream_body, headers={"Content-Type": "application/json"})
+    )
+    _install_mock(transport)
+
+    async with await _app_client() as client:
+        response = await client.post(
+            "/v1/messages/count_tokens?beta=true",
+            content=raw_body,
+            headers={"x-api-key": "sk-123", "content-type": "application/json"},
+        )
+
+    assert response.status_code == 200
+    assert response.content == upstream_body
+    assert transport.request is not None
+    assert transport.request.url.path == "/v1/messages/count_tokens"
+    assert transport.request.url.query.decode() == "beta=true"
+    assert transport.request.content == raw_body
+    assert transport.request.headers["x-api-key"] == "sk-123"
+
+
+async def test_catch_all_connect_error_502_names_exception_type(caplog) -> None:
+    """Upstream connect failure on the catch-all still names the exception
+    type in the 502 body and the warning log."""
+    transport = _CapturingTransport(httpx.Response(200), error=httpx.ConnectError(""))
+    _install_mock(transport)
+
+    with caplog.at_level(logging.WARNING, logger="entropy_gate.proxy"):
+        async with await _app_client() as client:
+            response = await client.post(
+                "/v1/messages/count_tokens",
+                content=b'{"messages": []}',
+                headers={"x-api-key": "sk"},
+            )
+
+    assert response.status_code == 502
+    assert response.json()["error"] == "Upstream error: ConnectError"
+    assert any("ConnectError" in r.getMessage() for r in caplog.records)
