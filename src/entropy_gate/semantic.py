@@ -9,8 +9,8 @@ EmbeddingFidelityGate: cosine similarity via nomic-embed-text
 
 from __future__ import annotations
 
-import json
 import math
+import os as _os
 import subprocess
 import time
 from pathlib import Path
@@ -18,13 +18,13 @@ from typing import Any
 
 import httpx
 
+from entropy_gate.chunked_embeddings import embed_text_dynamic_sync
+
 # Model paths: use environment variables with sensible defaults.
 # ENTROPY_GATE_GGUF_MODEL — path to GGUF model file for logprobs
 # ENTROPY_GATE_LLAMA_SERVER — path to llama-server binary
 # ENTROPY_GATE_OLLAMA_URL — Ollama base URL
 # ENTROPY_GATE_EMBEDDING_MODEL — embedding model name
-
-import os as _os
 
 DEFAULT_MODEL_PATH = _os.environ.get("ENTROPY_GATE_GGUF_MODEL", "")
 DEFAULT_LLAMA_SERVER = _os.environ.get(
@@ -191,7 +191,7 @@ class LogprobEnergyEstimator:
                 self._process.kill()
             self._process = None
 
-    def __enter__(self) -> "LogprobEnergyEstimator":
+    def __enter__(self) -> LogprobEnergyEstimator:
         return self
 
     def __exit__(self, *args: Any) -> None:
@@ -201,8 +201,9 @@ class LogprobEnergyEstimator:
 class EmbeddingFidelityGate:
     """Semantic fidelity via embedding cosine similarity.
 
-    Uses Ollama /api/embeddings with nomic-embed-text to compute
-    actual embedding vectors and their cosine similarity.
+    Uses Ollama /api/embed with nomic-embed-text, chunking to the model's
+    real reported context so arbitrarily long
+    messages are embedded at full quality instead of being silently truncated.
     """
 
     def __init__(
@@ -210,22 +211,29 @@ class EmbeddingFidelityGate:
         ollama_url: str = DEFAULT_OLLAMA_URL,
         model: str = DEFAULT_EMBEDDING_MODEL,
     ):
-        self._url = f"{ollama_url}/api/embeddings"
+        self._base_url = ollama_url.rstrip("/")
         self._model = model
         self._client = httpx.Client(timeout=30.0)
 
     def embed(self, text: str) -> list[float]:
-        """Get embedding vector for text."""
+        """Get embedding vector for text, chunked to the model's real context.
+
+        Fits in context -> one call, vector unchanged.  Longer -> overlapping
+        chunks in one batched call, pooled into a single vector of the usual
+        dimension.  Failure behaviour is unchanged: [] means "no vector", which
+        :meth:`similarity` reads as "can't measure, assume preserved".
+        """
         if not text.strip():
             return []
 
-        payload = {"model": self._model, "prompt": text}
         try:
-            resp = self._client.post(self._url, json=payload, timeout=30.0)
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("embedding", [])
-        except httpx.HTTPError:
+            return embed_text_dynamic_sync(
+                text,
+                model=self._model,
+                base_url=self._base_url,
+                client=self._client,
+            )
+        except (httpx.HTTPError, ValueError):
             return []
 
     def similarity(self, text_a: str, text_b: str) -> float:
@@ -252,7 +260,7 @@ class EmbeddingFidelityGate:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "EmbeddingFidelityGate":
+    def __enter__(self) -> EmbeddingFidelityGate:
         return self
 
     def __exit__(self, *args: Any) -> None:
