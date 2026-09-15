@@ -9,6 +9,8 @@ from collections import Counter
 
 import httpx
 
+from entropy_gate.chunked_embeddings import embed_text_dynamic_sync
+
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 
@@ -72,11 +74,12 @@ def embedding_cosine_similarity(
     ollama_url: str = DEFAULT_OLLAMA_URL,
     model: str = DEFAULT_EMBEDDING_MODEL,
 ) -> float:
-    """Phase 2: Cosine similarity via Ollama embedding model.
+    """Phase 2: Cosine similarity via dynamic chunked embeddings.
 
-    Uses nomic-embed-text to compute embedding vectors for both texts
-    and returns their cosine similarity. Falls back to token-level
-    cosine_similarity if the embedding endpoint is unavailable.
+    Uses nomic-embed-text through the shared dynamic embedder (real
+    reported context, chunking for over-long texts) and returns the
+    cosine similarity. Falls back to token-level cosine_similarity if
+    the embedding endpoint is unavailable.
 
     Args:
         original_text: The full original prompt text.
@@ -109,18 +112,20 @@ def _get_embedding(
     text: str,
     ollama_url: str,
     model: str,
-    timeout: float = 10.0,
 ) -> list[float]:
-    """Get embedding vector from Ollama /api/embeddings."""
+    """Dynamic chunked embedding via the shared helper.
+
+    The model's real context is read from ``POST /api/show`` (cached
+    per model); texts longer than it are split into overlapping windows
+    and embedded in ONE batched ``/api/embed`` call, combined by
+    length-weighted mean pooling + L2 normalization — never silently
+    truncated.  The old per-call 10s timeout is superseded by the
+    helper's embed ceiling.  Any failure returns ``[]`` so callers fall
+    back to token-level similarity.
+    """
     if not text.strip():
         return []
     try:
-        r = httpx.post(
-            f"{ollama_url}/api/embeddings",
-            json={"model": model, "prompt": text},
-            timeout=timeout,
-        )
-        r.raise_for_status()
-        return r.json().get("embedding", [])
+        return embed_text_dynamic_sync(text, model=model, base_url=ollama_url)
     except Exception:
         return []

@@ -89,3 +89,28 @@ def test_embedding_cosine_similarity_different():
 def test_embedding_cosine_similarity_empty():
     sim = embedding_cosine_similarity("", "")
     assert sim == 1.0
+
+
+def test_embedding_path_uses_dynamic_chunked_embedder(monkeypatch):
+    """The live fidelity path must go through the dynamic chunked embedder
+    (real reported context, chunking), not the legacy /api/embeddings."""
+
+    calls: list[str] = []
+
+    def fake_dynamic(text: str, *, model: str, base_url: str) -> list[float]:
+        calls.append(text)
+        return [1.0, 0.0]
+
+    monkeypatch.setattr("entropy_gate.fidelity.embed_text_dynamic_sync", fake_dynamic)
+    sim = embedding_cosine_similarity("original text", "compressed text")
+    assert sim == 1.0  # identical vectors -> cosine 1.0
+    assert calls == ["original text", "compressed text"]
+
+
+def test_embedding_failure_falls_back_to_token_similarity(monkeypatch):
+    def raising_dynamic(text: str, *, model: str, base_url: str) -> list[float]:
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr("entropy_gate.fidelity.embed_text_dynamic_sync", raising_dynamic)
+    sim = embedding_cosine_similarity("alpha beta", "alpha beta")
+    assert sim == 1.0  # token-level fallback on identical tokens
