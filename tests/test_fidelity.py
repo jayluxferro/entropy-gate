@@ -7,8 +7,8 @@ os.environ["NO_PROXY"] = "127.0.0.1,localhost"
 
 from entropy_gate.fidelity import (
     cosine_similarity,
-    energy_weighted_similarity,
     embedding_cosine_similarity,
+    energy_weighted_similarity,
 )
 
 
@@ -114,3 +114,62 @@ def test_embedding_failure_falls_back_to_token_similarity(monkeypatch):
     monkeypatch.setattr("entropy_gate.fidelity.embed_text_dynamic_sync", raising_dynamic)
     sim = embedding_cosine_similarity("alpha beta", "alpha beta")
     assert sim == 1.0  # token-level fallback on identical tokens
+
+
+# ---------------------------------------------------------------------------
+# Frozen-energy semantics (hostile audit E1: inf/inf=NaN bypassed the gate)
+# ---------------------------------------------------------------------------
+
+
+def test_frozen_token_dropped_scores_zero_not_one():
+    """Regression (E1): inf/inf = NaN and min(1.0, nan) == 1.0, so any
+    compression of a text containing a frozen token (math $...$, the
+    redactor's [REDACTED_xxxx] markers) was scored PERFECT.  A dropped
+    frozen token must fail the gate outright."""
+    import math
+
+    from entropy_gate.fidelity import energy_weighted_similarity
+
+    original = ["keep", "this", "$x$", "and", "context"]
+    energies = {"keep": 1.0, "this": 1.0, "and": 1.0, "context": 1.0, "$x$": math.inf}
+    # Drop the frozen token, keep everything else:
+    compressed = ["keep", "this", "and", "context"]
+    assert energy_weighted_similarity(original, compressed, energies) == 0.0
+
+
+def test_frozen_token_kept_leaves_the_ratio_finite_and_strict():
+    """With the frozen token preserved, the ratio runs over finite
+    energies only — dropping ordinary tokens must still read as loss."""
+    import math
+
+    from entropy_gate.fidelity import energy_weighted_similarity
+
+    original = ["keep", "this", "$x$", "and", "context"]
+    energies = {"keep": 1.0, "this": 1.0, "and": 1.0, "context": 1.0, "$x$": math.inf}
+    # Frozen kept; two ordinary tokens dropped -> 3/4 finite energy kept.
+    sim = energy_weighted_similarity(original, ["keep", "this", "$x$", "and"], energies)
+    assert 0.5 < sim < 1.0
+
+
+def test_all_frozen_text_measured_by_token_overlap():
+    import math
+
+    from entropy_gate.fidelity import energy_weighted_similarity
+
+    energies = {"$a$": math.inf, "$b$": math.inf}
+    assert energy_weighted_similarity(["$a$", "$b$"], ["$a$", "$b$"], energies) == 1.0
+    # All-frozen but half dropped: frozen_missing -> 0.0 (not NaN-1.0).
+    assert energy_weighted_similarity(["$a$", "$b$"], ["$a$"], energies) == 0.0
+
+
+def test_memory_freeze_lookup_now_hits():
+    """Regression (E2): proxy._block_hash returned 64-hex while the store
+    keyed 20-hex — every cross-turn freeze lookup missed."""
+    from entropy_gate.memory import MemoryStore, _hash_text
+    from entropy_gate.proxy import _block_hash
+
+    store = MemoryStore()
+    store.store("same big block " * 40)
+    digest = _block_hash("same big block " * 40)
+    assert digest == _hash_text("same big block " * 40)
+    assert store.get(digest) is not None  # the lookup path finally hits

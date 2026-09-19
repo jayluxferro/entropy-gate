@@ -7,8 +7,6 @@ Phase 2: Ollama embedding cosine similarity via nomic-embed-text.
 import math
 from collections import Counter
 
-import httpx
-
 from entropy_gate.chunked_embeddings import embed_text_dynamic_sync
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
@@ -55,17 +53,35 @@ def energy_weighted_similarity(
     orig_set = Counter(original)
     comp_set = Counter(compressed)
 
-    total_energy = sum(energies.get(t, 0.0) * c for t, c in orig_set.items())
+    # Frozen tokens (energy=inf) are a HARD constraint, not a ratio term:
+    # inf/inf is NaN, and Python's min(1.0, nan) returns 1.0 — the old
+    # math rubber-stamped ANY compression as perfect whenever the text
+    # carried a frozen pattern (math $...$, llm-redactor's
+    # [REDACTED_xxxx] markers — one hop upstream in this very chain).
+    # A dropped frozen token scores 0.0 outright; surviving frozen tokens
+    # drop out of the ratio, which is computed over finite energies only.
+    frozen_missing = any(
+        math.isinf(energies.get(t, 0.0)) and comp_set.get(t, 0) < c for t, c in orig_set.items()
+    )
+    if frozen_missing:
+        return 0.0
+    finite = {t: e for t, e in energies.items() if not math.isinf(e)}
+
+    total_energy = sum(finite.get(t, 0.0) * c for t, c in orig_set.items())
+    if total_energy != total_energy:  # NaN guard — never a perfect score
+        return 0.0
     if total_energy == 0:
+        # All-frozen text (or no energy signal): token overlap decides.
         return cosine_similarity(original, compressed)
 
     preserved_energy = 0.0
     for token, orig_c in orig_set.items():
         comp_c = comp_set.get(token, 0)
         fraction_preserved = min(orig_c, comp_c) / orig_c if orig_c > 0 else 0.0
-        preserved_energy += energies.get(token, 0.0) * orig_c * fraction_preserved
+        preserved_energy += finite.get(token, 0.0) * orig_c * fraction_preserved
 
-    return min(1.0, preserved_energy / total_energy)
+    ratio = preserved_energy / total_energy
+    return min(1.0, ratio) if ratio == ratio else 0.0
 
 
 def embedding_cosine_similarity(

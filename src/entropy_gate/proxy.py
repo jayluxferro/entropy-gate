@@ -295,8 +295,13 @@ def _compress_spans(
 
 
 def _block_hash(text: str) -> str:
+    # MUST match memory._hash_text exactly (same normalization, same
+    # [:20] truncation): the cross-turn freeze looks up store keys with
+    # this digest.  A length mismatch (64-hex vs the store's 20-hex)
+    # made every lookup miss — --memory was pure overhead from birth
+    # until the hostile audit caught it.
     normalized = " ".join(text.split())
-    return hashlib.sha256(normalized.encode()).hexdigest()
+    return hashlib.sha256(normalized.encode()).hexdigest()[:20]
 
 
 # ---------------------------------------------------------------------------
