@@ -192,3 +192,18 @@ def test_docs_disabled_by_default_on_the_chain_port(monkeypatch):
     assert "/openapi.json" not in paths
     assert "/redoc" not in paths
     assert "/docs/redoc" not in paths
+
+
+def test_docs_paths_die_at_this_hop_not_forwarded():
+    """Regression (live adversarial finding): the catch-all used to proxy
+    /docs and /openapi.json to the next hop, which served ITS docs back —
+    the disclosure survived the unmount.  These paths must 404 LOCALLY."""
+    from fastapi.testclient import TestClient
+
+    from entropy_gate.proxy import app
+
+    client = TestClient(app)
+    for path in ("/docs", "/openapi.json", "/redoc", "/docs/redoc"):
+        r = client.get(path)
+        assert r.status_code == 404, (path, r.status_code)
+        assert "openapi" not in r.text.lower()

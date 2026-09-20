@@ -102,6 +102,14 @@ async def messages(request: Request) -> Any:
     return await _handle_request(request)
 
 
+# Docs-shaped paths die HERE, never forwarded: this hop's own docs are
+# disabled above, but the catch-all used to proxy /docs and /openapi.json
+# to the next hop — which serves ITS docs back through the chain, so the
+# route-map disclosure survived the fix (caught live by the adversarial
+# verifier: entropy-gate's port served strata's full OpenAPI map).
+_DOCS_PATHS = frozenset({"/docs", "/docs/redoc", "/redoc", "/openapi.json"})
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def passthrough(request: Request, path: str) -> Response:
     """Catch-all raw passthrough (count_tokens, models, …).
@@ -110,6 +118,8 @@ async def passthrough(request: Request, path: str) -> Response:
     upstream byte-identical, original path and query intact, via the same
     forwarder the chat surfaces use for non-compressible bodies.
     """
+    if "/" + path in _DOCS_PATHS or path in _DOCS_PATHS:
+        return Response(status_code=404)
     raw_body = await request.body()
     return await _proxy_passthrough(request, body={}, raw_body=raw_body)
 
