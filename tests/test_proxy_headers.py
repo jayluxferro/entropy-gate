@@ -8,9 +8,6 @@ request path (not the configured base path).
 
 from __future__ import annotations
 
-import json
-from typing import Any
-
 import httpx
 import pytest
 from fastapi.testclient import TestClient

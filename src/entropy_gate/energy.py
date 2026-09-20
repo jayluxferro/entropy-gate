@@ -8,7 +8,7 @@ import math
 import re
 from collections import Counter
 
-from entropy_gate.models import QuenchingConfig, EnergyWeights, TokenEnergy
+from entropy_gate.models import EnergyWeights, QuenchingConfig, TokenEnergy
 
 # ── Tokenizer ──────────────────────────────────────────────────────────
 # Splits on word boundaries AND punctuation, preserving:

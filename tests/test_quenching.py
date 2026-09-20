@@ -2,16 +2,15 @@
 
 import math
 
-from entropy_gate.models import QuenchingConfig, EnergyWeights
 from entropy_gate.energy import estimate_token_energies
+from entropy_gate.models import QuenchingConfig
 from entropy_gate.quenching import (
+    _boltzmann_survival,
+    _energy_cutoff,
+    _reconstruct_text,
     quench,
     quench_output,
-    _energy_cutoff,
-    _boltzmann_survival,
-    _reconstruct_text,
 )
-
 
 SAMPLE_TOKENS = ["def", "hello", "(", "x", ",", "y", ")", ":", "return", "x", "+", "y"]
 

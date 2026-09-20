@@ -17,7 +17,7 @@ from entropy_gate.models import CompressionResult, QuenchingConfig, TokenEnergy
 def _energy_cutoff(
     token_energies: list[TokenEnergy],
     temperature: float,
-    T0: float,
+    T0: float,  # noqa: N803 — physics notation (SPEC §3 schedule)
 ) -> list[TokenEnergy]:
     """Deterministic energy-threshold filtering.
 
@@ -122,7 +122,7 @@ def quench(
             schedule_steps=0,
         )
 
-    T0 = config.temperature_initial
+    T0 = config.temperature_initial  # noqa: N806 — physics notation
     k = config.boltzmann_k
 
     best_text = _reconstruct_text(token_energies)
@@ -131,7 +131,7 @@ def quench(
     best_tau = 0
 
     for tau in range(1, 101):
-        T = T0 / (1.0 + config.cooling_rate * tau)
+        T = T0 / (1.0 + config.cooling_rate * tau)  # noqa: N806 — physics notation
 
         if config.survival_mode == "boltzmann":
             # Boltzmann is stochastic — run multiple trials per step and
@@ -142,7 +142,6 @@ def quench(
                 candidates = _boltzmann_survival(token_energies, T, k)
                 if len(candidates) <= len(best_survivors) if best_survivors else False:
                     continue  # no improvement in compression
-                trial_compressed = _reconstruct_text(candidates)
                 energy_map = {te.token: te.energy for te in token_energies}
                 trial_sim = energy_weighted_similarity(
                     [te.token for te in token_energies],

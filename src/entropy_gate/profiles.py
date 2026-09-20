@@ -21,7 +21,7 @@ Profiles:
                leveraging the Caveman brevity finding.
 """
 
-from entropy_gate.models import QuenchingConfig, EnergyWeights
+from entropy_gate.models import EnergyWeights, QuenchingConfig
 
 
 def maximum() -> QuenchingConfig:

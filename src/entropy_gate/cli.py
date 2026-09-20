@@ -5,14 +5,11 @@ Usage:
     python -m entropy_gate.cli --config config.yaml --profile best --memory
 """
 
-from pathlib import Path
-from typing import Optional
-
 import click
 import uvicorn
 
 from entropy_gate.config import load_quenching_config, load_server_config
-from entropy_gate.proxy import app, quenching_config, server_config
+from entropy_gate.proxy import app
 
 
 @click.command()
@@ -151,7 +148,7 @@ def main(
     proxy_mod.quenching_config = cc
     proxy_mod.server_config = sc
 
-    click.echo(f"Entropy Gate v0.2.0" + (f" [profile: {profile}]" if profile else ""))
+    click.echo("Entropy Gate v0.2.0" + (f" [profile: {profile}]" if profile else ""))
     click.echo(f"  Upstream:    {sc.upstream_url}")
     click.echo(f"  Port:        {sc.port}")
     click.echo(f"  Quenching:   T0={cc.temperature_initial}, alpha={cc.cooling_rate}")

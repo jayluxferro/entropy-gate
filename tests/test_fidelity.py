@@ -108,6 +108,8 @@ def test_embedding_path_uses_dynamic_chunked_embedder(monkeypatch):
 
 
 def test_embedding_failure_falls_back_to_token_similarity(monkeypatch):
+    import httpx
+
     def raising_dynamic(text: str, *, model: str, base_url: str) -> list[float]:
         raise httpx.ConnectError("down")
 
@@ -173,3 +175,20 @@ def test_memory_freeze_lookup_now_hits():
     digest = _block_hash("same big block " * 40)
     assert digest == _hash_text("same big block " * 40)
     assert store.get(digest) is not None  # the lookup path finally hits
+
+
+def test_docs_disabled_by_default_on_the_chain_port(monkeypatch):
+    """The chain-facing port must not mount /docs, /redoc, /openapi.json —
+    an in-pipeline hop handing out its route map is free recon.  Checked
+    via the route table: an actual GET hits the catch-all passthrough,
+    which forwards to an unconfigured upstream and buries the assertion
+    under transport teardown noise."""
+    monkeypatch.delenv("ENTROPY_GATE_DOCS", raising=False)
+
+    from entropy_gate.proxy import app
+
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert "/docs" not in paths
+    assert "/openapi.json" not in paths
+    assert "/redoc" not in paths
+    assert "/docs/redoc" not in paths

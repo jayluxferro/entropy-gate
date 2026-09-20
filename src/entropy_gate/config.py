@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from entropy_gate.models import QuenchingConfig, EnergyWeights, ServerConfig
+from entropy_gate.models import QuenchingConfig, ServerConfig
 
 
 def _env_key(name: str) -> str:
@@ -77,7 +77,7 @@ def _load_yaml(path: str | Path) -> dict:
     path = Path(path)
     if not path.exists():
         return {}
-    with open(path, "r") as f:
+    with open(path) as f:
         return yaml.safe_load(f) or {}
 
 

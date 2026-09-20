@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -39,10 +40,18 @@ from entropy_gate.structure import (
     turn_temperature,
 )
 
+# Docs endpoints are OFF on the chain-facing port: this service sits in a
+# pipeline where every hop is reachable from agent traffic, and /docs +
+# /openapi.json hand an attacker the full route map for free.  The audit
+# flagged them live; an operator who wants them can run with
+# ENTROPY_GATE_DOCS=1 (dev boxes only).
 app = FastAPI(
     title="Entropy Gate",
     version="0.2.0",
     description="Structural multi-turn entropy quenching for LLM pipelines",
+    docs_url="/docs" if os.environ.get("ENTROPY_GATE_DOCS") else None,
+    redoc_url="/docs/redoc" if os.environ.get("ENTROPY_GATE_DOCS") else None,
+    openapi_url="/openapi.json" if os.environ.get("ENTROPY_GATE_DOCS") else None,
 )
 
 # Set by cli.py at startup
@@ -553,6 +562,8 @@ def _forward_headers(request: Request) -> dict[str, str]:
 def _get_client() -> httpx.AsyncClient:
     global _http_client
     if _http_client is None:
-        # # keepalive_expiry=2.0: retire pooled connections before the upstream uvicorn's 5s idle close (stale-connection ReadError race, 2026-09-01).
+        # keepalive_expiry=2.0: retire pooled connections before the
+        # upstream uvicorn's 5s idle close (stale-connection ReadError
+        # race, 2026-09-01).
         _http_client = httpx.AsyncClient(limits=httpx.Limits(keepalive_expiry=2.0))
     return _http_client

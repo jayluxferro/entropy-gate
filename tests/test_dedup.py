@@ -1,6 +1,6 @@
 """Tests for context block deduplication."""
 
-from entropy_gate.dedup import deduplicate_blocks, _hash_block, _normalize_block, _split_into_blocks
+from entropy_gate.dedup import _hash_block, _normalize_block, _split_into_blocks, deduplicate_blocks
 
 
 def test_normalize_block_whitespace():
@@ -18,7 +18,10 @@ def test_hash_block_different():
 
 
 def test_split_into_blocks_paragraphs():
-    text = "Block A line 1.\n\nBlock B line 1.\n\nBlock C with enough characters to meet the minimum block size requirement."
+    text = (
+        "Block A line 1.\n\nBlock B line 1.\n\n"
+        "Block C with enough characters to meet the minimum block size requirement."
+    )
     blocks = _split_into_blocks(text, min_block_chars=30)
     assert len(blocks) >= 2
 
@@ -30,7 +33,10 @@ def test_split_into_blocks_short_text():
 
 
 def test_deduplicate_blocks_no_duplicates():
-    text = "First paragraph with enough content to be a valid block.\n\nSecond paragraph also with sufficient content here."
+    text = (
+        "First paragraph with enough content to be a valid block.\n\n"
+        "Second paragraph also with sufficient content here."
+    )
     result = deduplicate_blocks(text, min_block_chars=20)
     assert result.blocks_removed == 0
     assert result.tokens_saved == 0
@@ -38,7 +44,10 @@ def test_deduplicate_blocks_no_duplicates():
 
 
 def test_deduplicate_blocks_with_duplicates():
-    block = "This is a repeated block with enough characters to meet the minimum block size requirement for deduplication testing."
+    block = (
+        "This is a repeated block with enough characters to meet the "
+        "minimum block size requirement for deduplication testing."
+    )
     text = f"{block}\n\n{block}\n\n{block}"
     result = deduplicate_blocks(text, min_block_chars=20)
     assert result.blocks_removed == 2

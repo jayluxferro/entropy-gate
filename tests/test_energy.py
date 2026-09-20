@@ -1,15 +1,14 @@
 """Tests for multi-factor token energy estimation."""
 
-import pytest
-from entropy_gate.models import QuenchingConfig, EnergyWeights
 from entropy_gate.energy import (
-    estimate_token_energies,
+    _compute_positional_energy,
     _compute_statistical_energy,
     _compute_structural_energy,
-    _compute_positional_energy,
     _is_frozen,
     _split_into_chunks,
+    estimate_token_energies,
 )
+from entropy_gate.models import EnergyWeights, QuenchingConfig
 
 
 def test_split_into_chunks_basic():

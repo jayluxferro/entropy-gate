@@ -5,15 +5,13 @@ import os
 os.environ["no_proxy"] = "127.0.0.1,localhost"
 os.environ["NO_PROXY"] = "127.0.0.1,localhost"
 
-from entropy_gate.models import QuenchingConfig, EnergyWeights
-from entropy_gate.energy import estimate_token_energies
-from entropy_gate.quenching import quench, quench_output
 from entropy_gate.dedup import deduplicate_blocks
+from entropy_gate.energy import estimate_token_energies
 from entropy_gate.fidelity import (
-    energy_weighted_similarity,
     embedding_cosine_similarity,
-    cosine_similarity,
 )
+from entropy_gate.models import QuenchingConfig
+from entropy_gate.quenching import quench, quench_output
 
 # Test prompts
 CODE_REVIEW = (

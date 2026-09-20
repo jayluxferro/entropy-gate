@@ -16,7 +16,6 @@ this yields 90-99% total token reduction.
 import hashlib
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -92,7 +91,7 @@ class MemoryStore:
             self._blocks[block_id].access_count += 1
         return block_id
 
-    def lookup(self, text: str) -> Optional[str]:
+    def lookup(self, text: str) -> str | None:
         """Check if text is in memory. Returns block_id if found."""
         block_id = _hash_text(text)
         if block_id in self._blocks:
@@ -100,7 +99,7 @@ class MemoryStore:
             return block_id
         return None
 
-    def get(self, block_id: str) -> Optional[MemoryBlock]:
+    def get(self, block_id: str) -> MemoryBlock | None:
         """Retrieve a block by ID."""
         return self._blocks.get(block_id)
 
