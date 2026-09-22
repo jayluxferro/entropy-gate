@@ -1,0 +1,47 @@
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  gitleaks:
+    name: Secret scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv (Python 3.12)
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          python-version: "3.12"
+
+      - name: Sync, lint and format-check
+        # The dev group (pytest/pytest-asyncio/ruff) is declared in
+        # pyproject.toml — before that, a fresh uv sync produced a venv with
+        # no test runner at all (pytest existed locally only via a manual
+        # `uv pip install` the lock never recorded).
+        run: |
+          uv sync --all-groups
+          uv run ruff check src/ tests/
+          uv run ruff format --check src/ tests/
+
+      - name: Tests
+        # No DB needed: ollama calls are mocked/fail-open in the suite.
+        run: uv run pytest -q
