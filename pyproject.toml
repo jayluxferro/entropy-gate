@@ -24,3 +24,14 @@ select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[dependency-groups]
+# pytest lived in this venv only via a manual `uv pip install` — the lock
+# never recorded it, so a fresh `uv sync` (i.e. CI) got no test runner.
+# Declared here to match the sibling repos (palisade/strata); pytest-asyncio
+# is required by asyncio_mode = "auto" above.
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
