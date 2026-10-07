@@ -1,7 +1,7 @@
 """Semantic fidelity safety gate.
 
 Phase 1: Energy-weighted token set overlap.
-Phase 2: Ollama embedding cosine similarity via nomic-embed-text.
+Phase 2: Ollama embedding cosine similarity via embeddinggemma-2:740m.
 """
 
 import math
@@ -10,7 +10,7 @@ from collections import Counter
 from entropy_gate.chunked_embeddings import embed_text_dynamic_sync
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+DEFAULT_EMBEDDING_MODEL = "embeddinggemma-2:740m"
 
 
 def cosine_similarity(original: list[str], compressed: list[str]) -> float:
@@ -92,7 +92,7 @@ def embedding_cosine_similarity(
 ) -> float:
     """Phase 2: Cosine similarity via dynamic chunked embeddings.
 
-    Uses nomic-embed-text through the shared dynamic embedder (real
+    Uses embeddinggemma-2:740m through the shared dynamic embedder (real
     reported context, chunking for over-long texts) and returns the
     cosine similarity. Falls back to token-level cosine_similarity if
     the embedding endpoint is unavailable.

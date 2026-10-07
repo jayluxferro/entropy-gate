@@ -45,7 +45,8 @@ class QuenchingConfig:
     boltzmann_k: float = 1.0
 
     # Phase 2: embedding fidelity
-    embedding_model: str = "nomic-embed-text"
+    # embeddinggemma-2:740m (768-dim, same as nomic-embed-text — no store migration)
+    embedding_model: str = "embeddinggemma-2:740m"
     ollama_base_url: str = "http://localhost:11434"
 
     # Multi-turn / structural compression

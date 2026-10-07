@@ -4,7 +4,7 @@ Uses llama.cpp server for per-token log probabilities and Ollama
 for embedding-based semantic similarity.
 
 LogprobEnergyEstimator: E_stat(t) = -log P_LLM(t | context)
-EmbeddingFidelityGate: cosine similarity via nomic-embed-text
+EmbeddingFidelityGate: cosine similarity via embeddinggemma-2:740m
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ DEFAULT_LLAMA_SERVER = _os.environ.get(
     "llama-server",  # try PATH first
 )
 DEFAULT_OLLAMA_URL = _os.environ.get("ENTROPY_GATE_OLLAMA_URL", "http://localhost:11434")
-DEFAULT_EMBEDDING_MODEL = _os.environ.get("ENTROPY_GATE_EMBEDDING_MODEL", "nomic-embed-text")
+DEFAULT_EMBEDDING_MODEL = _os.environ.get("ENTROPY_GATE_EMBEDDING_MODEL", "embeddinggemma-2:740m")
 
 
 class LogprobEnergyEstimator:
@@ -201,7 +201,7 @@ class LogprobEnergyEstimator:
 class EmbeddingFidelityGate:
     """Semantic fidelity via embedding cosine similarity.
 
-    Uses Ollama /api/embed with nomic-embed-text, chunking to the model's
+    Uses Ollama /api/embed with embeddinggemma-2:740m, chunking to the model's
     real reported context so arbitrarily long
     messages are embedded at full quality instead of being silently truncated.
     """

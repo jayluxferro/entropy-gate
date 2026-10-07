@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 # Same env names as semantic.py — this module must not import it (semantic.py
 # imports us), so the two constants are declared in both places on purpose.
 DEFAULT_OLLAMA_URL = os.environ.get("ENTROPY_GATE_OLLAMA_URL", "http://localhost:11434")
-DEFAULT_EMBEDDING_MODEL = os.environ.get("ENTROPY_GATE_EMBEDDING_MODEL", "nomic-embed-text")
+DEFAULT_EMBEDDING_MODEL = os.environ.get("ENTROPY_GATE_EMBEDDING_MODEL", "embeddinggemma-2:740m")
 
 # SPEC §2.2 — chars/4 estimation heuristic, no tokenizer dependency.
 TOKENS_PER_CHAR = 0.25
