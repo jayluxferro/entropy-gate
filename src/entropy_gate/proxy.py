@@ -39,6 +39,7 @@ from entropy_gate.structure import (
     plan_compression,
     turn_temperature,
 )
+from entropy_gate.upstream_retry import retry_upstream
 
 # Docs endpoints are OFF on the chain-facing port: this service sits in a
 # pipeline where every hop is reachable from agent traffic, and /docs +
@@ -184,13 +185,19 @@ async def _proxy_compressed(
 
     start_time = time.time()
     upstream_url = _build_upstream_url(request)
-    try:
-        upstream_resp = await _get_client().post(
+    headers = _forward_headers(request)
+    client = _get_client()
+
+    async def _send() -> httpx.Response:
+        return await client.post(
             upstream_url,
             json=compressed_body,
-            headers=_forward_headers(request),
+            headers=headers,
             timeout=300.0,
         )
+
+    try:
+        upstream_resp = await retry_upstream(_send, service="entropy-gate", logger=log)
         if upstream_resp.status_code >= 400:
             # Propagate the real status code + body so the agent sees
             # rate limits (429), auth errors (401), etc. — not a generic 502.
@@ -342,23 +349,20 @@ async def _proxy_passthrough(
     avoid re-encoding the body.
     """
     upstream_url = _build_upstream_url(request)
-    try:
-        upstream_resp = await _get_client().request(
+    headers = _forward_headers(request)
+    client = _get_client()
+
+    async def _send() -> httpx.Response:
+        return await client.request(
             request.method,
             upstream_url,
             content=raw_body,
-            headers=_forward_headers(request),
+            headers=headers,
             timeout=300.0,
         )
-        passthrough_headers = {
-            k: v for k, v in upstream_resp.headers.items() if k.lower() not in _HOP_BY_HOP
-        }
-        return Response(
-            content=upstream_resp.content,
-            status_code=upstream_resp.status_code,
-            media_type=upstream_resp.headers.get("content-type"),
-            headers=passthrough_headers,
-        )
+
+    try:
+        upstream_resp = await retry_upstream(_send, service="entropy-gate", logger=log)
     except httpx.TimeoutException as exc:
         # str(exc) is EMPTY for timeouts — name the type so the log line and
         # the client message say WHICH timeout fired (connect vs read/pool).
@@ -371,6 +375,16 @@ async def _proxy_passthrough(
         detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
         log.warning("entropy-gate: upstream request to %s failed: %s", upstream_url, detail)
         return JSONResponse(status_code=502, content={"error": f"Upstream error: {detail}"})
+
+    passthrough_headers = {
+        k: v for k, v in upstream_resp.headers.items() if k.lower() not in _HOP_BY_HOP
+    }
+    return Response(
+        content=upstream_resp.content,
+        status_code=upstream_resp.status_code,
+        media_type=upstream_resp.headers.get("content-type"),
+        headers=passthrough_headers,
+    )
 
 
 async def _proxy_streaming(
@@ -405,12 +419,18 @@ async def _proxy_streaming(
 
     # Connect-timeout for the pre-commit phase is handled by httpx; the
     # streaming read timeout stays generous (600s) as before.
-    upstream_req = client.build_request(
-        "POST", upstream_url, content=raw_body, headers=headers, timeout=600.0
-    )
+    # ``client.send(stream=True)`` returns once response HEADERS arrive, so
+    # a retry here is still pre-commit: no SSE byte has reached the client.
+    def _build_request() -> httpx.Request:
+        return client.build_request(
+            "POST", upstream_url, content=raw_body, headers=headers, timeout=600.0
+        )
+
+    async def _send() -> httpx.Response:
+        return await client.send(_build_request(), stream=True)
 
     try:
-        upstream_resp = await client.send(upstream_req, stream=True)
+        upstream_resp = await retry_upstream(_send, service="entropy-gate", logger=log)
     except httpx.TimeoutException as exc:
         # str(exc) is EMPTY for timeouts — name the type so the log line and
         # the client message say WHICH timeout fired (connect vs read/pool).

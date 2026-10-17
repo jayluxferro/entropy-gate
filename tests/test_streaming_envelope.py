@@ -416,6 +416,36 @@ class _ConnectTimeoutTransport(httpx.AsyncBaseTransport):
         raise httpx.ConnectTimeout("")
 
 
+class _FlakyThenStaticTransport(httpx.AsyncBaseTransport):
+    """Raises once, then returns a fixed response — for pre-commit retry tests."""
+
+    def __init__(self, response: httpx.Response, *, error: Exception) -> None:
+        self._response = response
+        self._error = error
+        self.calls = 0
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.calls += 1
+        if self.calls == 1:
+            raise self._error
+        return self._response
+
+
+class _CountedStreamingResetTransport(httpx.AsyncBaseTransport):
+    """Streams one chunk then raises; counts outbound request attempts."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.calls += 1
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=_EmptyStrReadErrorStream(),
+        )
+
+
 async def test_passthrough_connect_failure_504_names_timeout_type(caplog) -> None:
     """Regression: httpx timeouts have an EMPTY str() (anyio wrappers).  The
     504 body and the warning log must still name WHICH timeout fired —
@@ -432,6 +462,116 @@ async def test_passthrough_connect_failure_504_names_timeout_type(caplog) -> Non
     assert resp.status_code == 504
     assert resp.json()["error"] == "Upstream timeout: ConnectTimeout"
     assert any("ConnectTimeout" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Pre-commit retry regression tests
+# ---------------------------------------------------------------------------
+
+
+async def test_passthrough_read_error_retried_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pre-commit ReadError must be retried by TYPE and then succeed."""
+    monkeypatch.setattr("entropy_gate.upstream_retry.backoff_s", lambda attempt: 0.0)
+    transport = _FlakyThenStaticTransport(
+        httpx.Response(200, json={"id": "msg_retry", "content": []}),
+        error=httpx.ReadError(""),
+    )
+    _install_mock(transport)
+
+    async with await _app_client() as client:
+        resp = await client.post(
+            "/v1/messages",
+            json={"stream": False, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["id"] == "msg_retry"
+    assert transport.calls == 2
+
+
+async def test_passthrough_non_retryable_error_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HTTPStatusError is a real response — no retry, same 502 shape."""
+    monkeypatch.setattr("entropy_gate.upstream_retry.backoff_s", lambda attempt: 0.0)
+
+    class _StatusErrorTransport(httpx.AsyncBaseTransport):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            self.calls += 1
+            raise httpx.HTTPStatusError(
+                "upstream returned 500",
+                request=request,
+                response=httpx.Response(500, request=request),
+            )
+
+    transport = _StatusErrorTransport()
+    _install_mock(transport)
+
+    async with await _app_client() as client:
+        resp = await client.post(
+            "/v1/messages",
+            json={"stream": False, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert resp.status_code == 502
+    assert resp.json()["error"].startswith("Upstream error: HTTPStatusError")
+    assert transport.calls == 1
+
+
+async def test_streaming_read_error_before_commit_retries_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``client.send(stream=True)`` raises before headers -> retry pre-commit."""
+    monkeypatch.setattr("entropy_gate.upstream_retry.backoff_s", lambda attempt: 0.0)
+    transport = _FlakyThenStaticTransport(
+        httpx.Response(
+            200,
+            content=b'data: {"type": "message_start"}\n\n',
+            headers={"Content-Type": "text/event-stream"},
+        ),
+        error=httpx.ReadError(""),
+    )
+    _install_mock(transport)
+
+    async with await _app_client() as client:
+        resp = await client.post(
+            "/v1/messages",
+            json={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert resp.status_code == 200
+    assert resp.headers.get("content-type", "").startswith("text/event-stream")
+    assert transport.calls == 2
+    assert b"message_start" in resp.content
+
+
+async def test_streaming_midstream_read_error_single_terminal_frame_no_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ReadError AFTER the first chunk is committed must NOT retry; it must
+    produce exactly one terminal error frame."""
+    monkeypatch.setattr("entropy_gate.upstream_retry.backoff_s", lambda attempt: 0.0)
+    transport = _CountedStreamingResetTransport()
+    _install_mock(transport)
+
+    async with await _app_client() as client:
+        resp = await client.post(
+            "/v1/messages",
+            json={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert resp.status_code == 200
+    text = resp.text
+    assert transport.calls == 1
+    assert text.count("upstream_error") == 1
+    events = [e.strip() for e in text.strip().split("\n\n") if e.strip()]
+    assert events, "received zero complete frames"
+    assert events[-1].startswith("event: error")
 
 
 async def test_streaming_connect_failure_504_names_timeout_type(caplog) -> None:
