@@ -19,12 +19,9 @@ import logging
 import os
 import random
 from collections.abc import Awaitable, Callable
-from typing import TypeVar
 
 import anyio
 import httpx
-
-T = TypeVar("T")
 
 _RETRYABLE_TYPES: tuple[type[BaseException], ...] = (
     httpx.ConnectError,
@@ -80,7 +77,7 @@ def backoff_s(attempt: int) -> float:
     return min(max(jittered, _MIN_BACKOFF_S), _CAP_BACKOFF_S)
 
 
-async def retry_upstream(
+async def retry_upstream[T](
     attempt_call: Callable[[], Awaitable[T]],
     *,
     service: str,
